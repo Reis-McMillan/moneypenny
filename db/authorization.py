@@ -4,7 +4,6 @@ from voluptuous import Schema, Required
 
 class Authorization(Base):
     def __init__(self):
-        super().__init__()
         self.collection_name = 'authorizations'
         self.collection = self.client[self.db_name][self.collection_name]
         self.identity_fields = ['state']

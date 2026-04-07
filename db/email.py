@@ -16,7 +16,6 @@ class Email(Base):
     METADATA_INDEX_NAME = "email_metadata_vector_index"
 
     def __init__(self):
-        super().__init__()
         self.collection_name = 'emails'
         self.collection = self.client[self.db_name][self.collection_name]
         self.identity_fields = ['id']

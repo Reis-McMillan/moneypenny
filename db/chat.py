@@ -4,7 +4,6 @@ from voluptuous import Email, Schema, Required
 
 class Chat(Base):
     def __init__(self):
-        super().__init__()
         self.collection_name = 'chats'
         self.collection = self.client[self.db_name][self.collection_name]
         self.identity_fields = ['id']
