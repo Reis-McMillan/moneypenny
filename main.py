@@ -4,6 +4,7 @@ import logging
 from starlette.applications import Starlette
 import uvicorn
 
+import config
 from db.email import Email
 from db.auth_cache import AuthCache
 from db.authorization import Authorization
@@ -56,9 +57,9 @@ async def main():
     app = Starlette(lifespan=lifespan)
 
     logger.info(f"Starting HTTP server on {config.HOST}:{config.PORT}")
-    config = uvicorn.Config(app, host=config.HOST, port=config.PORT, log_level="info")
-    uv_server = uvicorn.Server(config)
+    uv_config = uvicorn.Config(app, host=config.HOST, port=config.PORT, log_level="info")
+    uv_server = uvicorn.Server(uv_config)
     await uv_server.serve()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())

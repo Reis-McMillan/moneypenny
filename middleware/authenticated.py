@@ -4,17 +4,15 @@ from starlette.authentication import (
 )
 
 import config
-from db.auth_cache import AuthCache
 from utils.jwks import get_public_key
 
 
 class User(SimpleUser):
-    def __init__(self, username, auth_cache: AuthCache):
+    def __init__(self, username: str, auth: dict):
         super().__init__(username)
-        auth = auth_cache.get(username)
         self.access_token = auth['access_token']
         self.refresh_token = auth['refresh_token']
-        self.external_tokens = auth['external_tokens']
+        self.external_tokens = auth.get('external_tokens')
 
 
 class BearerToken(AuthenticationBackend):
@@ -40,5 +38,8 @@ class BearerToken(AuthenticationBackend):
             raise AuthenticationError('Invalid auth token.')
 
         username = decoded['sub']
-        auth_cache = conn.request.app.state.db.auth_cache
-        return AuthCredentials(["authenticated"]), User(username, auth_cache)
+        auth_cache = conn.app.state.db.auth_cache
+        cached_auth = await auth_cache.get(username)
+        if not cached_auth:
+            raise AuthenticationError('User session not found.')
+        return AuthCredentials(["authenticated"]), User(username, cached_auth)

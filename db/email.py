@@ -2,7 +2,7 @@ import logging
 import re
 
 from pymongo.operations import SearchIndexModel
-from voluptuous import Schema, Required, Optional, All, Coerce
+from voluptuous import Email, Schema, Required, Optional, All, Coerce
 
 from config import MONGO_URI
 from config import DB_NAME
@@ -23,11 +23,12 @@ class Email(Base):
 
         self.schema = Schema({
             Required('id'): str,
-            Required('from'): str,
+            Required('owner'): Email(),
+            Required('from'): Email(),
             Required('subject'): str,
             Required('body'): str,
             Required('embedding'): All(list, [Coerce(float)]),
-            Optional('metadata_embedding'): All(list, [Coerce(float)]),
+            Required('metadata_embedding'): All(list, [Coerce(float)]),
             Optional('threadId'): str,
             Optional('labelIds'): [str],
             Optional('to'): str,

@@ -1,6 +1,6 @@
 from datetime import datetime
 from base import Base
-from voluptuous import Email, Schema, Required, Optional
+from voluptuous import Email, Schema, Required
 
 
 class AuthCache(Base):
