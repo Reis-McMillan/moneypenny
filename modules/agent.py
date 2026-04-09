@@ -1,18 +1,27 @@
-import asyncio
 import logging
 
+import jwt
 from langchain_ollama import ChatOllama
-from langchain.agents import create_agent
+from langchain.agents import create_agent, AgentState
 from langchain.tools import tool
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.mongodb import MongoDBSaver
+from pymongo import MongoClient
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from ollama import AsyncClient
+from typing_extensions import NotRequired
 
 import config
 from db.email import Email
+from db.auth_cache import AuthCache
+from modules.tokens import mcp_token_exchange
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class ChatState(AgentState):
+    title: NotRequired[str]
+
 
 class Agent:
 
@@ -34,25 +43,27 @@ class Agent:
 
     EMBEDDING_MODEL = "nomic-embed-text"
 
-    def __init__(self, ollama_client, mcp_client, email_db, tools):
-
+    def __init__(self, ollama_client, email_db, tools, thread_id, username, auth_cache):
         self.ollama_client = ollama_client
-        self.mcp_client = mcp_client
         self.email_db = email_db
+        self.username = username
+        self.auth_cache = auth_cache
+        self.config = {"configurable": {"thread_id": thread_id}}
 
-        llm = ChatOllama(
+        self.llm = ChatOllama(
             model="llama3.1",
             base_url=config.OLLAMA_HOST
         )
 
         tools.append(self._make_search_tool())
-        checkpointer = InMemorySaver()
+        checkpointer = MongoDBSaver(MongoClient(config.MONGO_URI), db_name=config.DB_NAME)
 
         self.agent = create_agent(
-            model=llm,
+            model=self.llm,
             system_prompt=self.SYSTEM_PROMPT,
             tools=tools,
             checkpointer=checkpointer,
+            state_schema=ChatState,
         )
 
     def _make_search_tool(self):
@@ -90,62 +101,67 @@ class Agent:
         return search_emails
 
     @classmethod
-    async def build(cls):
+    async def build(cls, thread_id, username, auth_cache):
         email_db = Email()
         await email_db.ensure_search_index()
 
         ollama_client = AsyncClient(host=config.OLLAMA_HOST)
 
+        mcp_token = await cls._ensure_mcp_token(username, auth_cache)
+
         mcp_client = MultiServerMCPClient({
             'email': {
                 'transport': 'http',
-                'url': config.MCP_URL + '/mcp/'
+                'url': config.MCP_URL + '/mcp/',
+                'headers': {'Authorization': f'Bearer {mcp_token}'}
             }
         })
 
         tools = await mcp_client.get_tools()
 
-        return cls(ollama_client, mcp_client, email_db, tools)
+        return cls(ollama_client, email_db, tools, thread_id, username, auth_cache)
 
+    @staticmethod
+    async def _ensure_mcp_token(username, auth_cache):
+        auth = await auth_cache.get(username)
+        if not auth:
+            raise ValueError(f"No cached auth for user {username}")
 
-async def spinner(stop_event: asyncio.Event):
-    import sys
-    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-    i = 0
-    while not stop_event.is_set():
-        sys.stdout.write(f"\r{frames[i % len(frames)]} Thinking...")
-        sys.stdout.flush()
-        i += 1
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=0.1)
-        except asyncio.TimeoutError:
-            pass
-    sys.stdout.write("\r" + " " * 20 + "\r")
-    sys.stdout.flush()
+        mcp_token = auth.get('mcp_token')
+        if mcp_token:
+            try:
+                jwt.decode(mcp_token, options={"verify_signature": False, "verify_exp": True})
+                return mcp_token
+            except jwt.ExpiredSignatureError:
+                logger.info("MCP token expired for %s, exchanging", username)
 
+        auth = await mcp_token_exchange(username, auth_cache)
+        return auth['mcp_token']
 
-async def main():
-    agent_wrapper = await Agent.build()
-    agent_config = {"configurable": {"thread_id": "1"}}
+    async def chat(self, message):
+        async for event in self.agent.astream_events(
+            {"messages": [{"role": "user", "content": message}]},
+            config=self.config,
+            version="v2",
+        ):
+            if event["event"] == "on_chat_model_stream":
+                token = event["data"]["chunk"].content
+                if token:
+                    yield token
 
-    while True:
-        user_input = await asyncio.to_thread(input, "\nYou: ")
-        if user_input.lower() in ("quit", "exit"):
-            break
-
-        stop = asyncio.Event()
-        spin_task = asyncio.create_task(spinner(stop))
-
-        response = await agent_wrapper.agent.ainvoke(
-            {"messages": [{"role": "user", "content": user_input}]},
-            config=agent_config,
+    async def generate_title(self, first_message):
+        response = await self.llm.ainvoke(
+            f"Generate a short 3-5 word title for a conversation that starts with this message. "
+            f"Reply with ONLY the title, nothing else.\n\nMessage: {first_message}"
         )
+        title = response.content.strip().strip('"')
+        self.agent.update_state(self.config, {"title": title})
+        return title
 
-        stop.set()
-        await spin_task
+    def get_title(self):
+        state = self.agent.get_state(self.config)
+        return state.values.get("title", "")
 
-        print(f"\nAssistant: {response['messages'][-1].content}")
-
-
-if __name__ == '__main__':
-    asyncio.run(main())
+    def get_history(self):
+        state = self.agent.get_state(self.config)
+        return state.values.get("messages", [])
