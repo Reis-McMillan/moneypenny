@@ -1,6 +1,8 @@
 import logging
 import re
 
+from datetime import datetime
+
 from pymongo.operations import SearchIndexModel
 from voluptuous import Email, Schema, Required, Optional, All, Coerce
 
@@ -28,6 +30,7 @@ class Email(Base):
             Required('body'): str,
             Required('embedding'): All(list, [Coerce(float)]),
             Required('metadata_embedding'): All(list, [Coerce(float)]),
+            Required('ingested_at'): datetime,
             Optional('threadId'): str,
             Optional('labelIds'): [str],
             Optional('to'): str,
@@ -74,6 +77,16 @@ class Email(Base):
         logger.info(f"Created search index '{self.SEARCH_INDEX_NAME}'")
         await self.collection.create_search_index(metadata_index)
         logger.info(f"Created search index '{self.METADATA_INDEX_NAME}'")
+
+    async def get_last_dt(self, owner: str) -> datetime:
+        doc = await self.collection.find_one(
+            {'owner': owner},
+            {'ingested_at': 1},
+            sort=[('ingested_at', -1)]
+        )
+        if doc and doc.get('ingested_at'):
+            return doc['ingested_at']
+        return datetime(1970, 1, 1)
 
     async def exists(self, email_id: str) -> bool:
         return await self.collection.find_one({'id': email_id}, {'_id': 1}) is not None
@@ -170,3 +183,4 @@ class Email(Base):
         return [entry['doc'] for entry in ranked[:limit]]
 
 
+# add function to find last embedded email of a given user

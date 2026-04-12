@@ -4,10 +4,12 @@ import jwt
 import secrets
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
+from starlette.routing import Router, Route
 from starlette.exceptions import HTTPException
 from urllib.parse import urlencode
 
 import config
+from modules.ingest.service import Service
 from utils.jwks import get_public_key
 
 
@@ -86,21 +88,62 @@ async def callback(request: Request):
     except jwt.InvalidTokenError:
         raise HTTPException(400, detail='Invalid identity token.')
 
-    if not decoded.get('nonce') or decoded['nonce'] != authorization['nonce']:
+    if decoded.get('nonce') != authorization['nonce']:
         raise HTTPException(status_code=400, detail='Nonce missing or nonce mismatch.')
 
+    external_tokens = decoded.get('tokens', [])
+    if external_tokens:
+        for t in external_tokens:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f'{config.AUTH_URL}/federation/tokens',
+                    headers={
+                        'Authorizatoin': f'Bearer {decoded['access_token']}'
+                    },
+                    params={
+                        'provider_id': t['provider_id'],
+                        'subject': t['subject']
+                    }
+                )
+            
+            if response.status_code != 200:
+                # to-do: add logging that request failed
+                pass
+
+            result = await response.json()
+            t['access_token'] = result['access_token']
+            t['token_type'] = result['token_type']
+            t['expires_at'] = result['expires_at']
+
     await request.app.state.db.auth_cache.upsert({
-        'user': decoded['sub'],
+        'user_id': decoded['sub'],
+        'email': decoded['email'],
         'roles': decoded.get('roles', []),
         'access_token': tokens['access_token'],
         'refresh_token': tokens['refresh_token'],
         'mcp_token': None,
-        'external_tokens': None,
-        'expires_at': datetime.fromtimestamp(decoded['auth_time'], tz=timezone.utc) + timedelta(days=60)
+        'external_tokens': external_tokens,
+        'expires_at': datetime.fromtimestamp(decoded['auth_time'], tz=timezone.utc) + timedelta(days=60) #might change to read form expires field
     })
+
+    if external_tokens:
+        services = request.app.state.services
+        user_id = int(decoded['sub'])
+        for et in external_tokens:
+            key = (user_id, et['provider_id'])
+            if key not in services:
+                svc_cls = Service.for_provider(et['provider_id'])
+                if svc_cls:
+                    svc_cls(user_id, et['subject']).start()
 
     return JSONResponse(
         content={
             'message': 'Successfully exchanged code for tokens.'
         }
     )
+
+
+auth_router = Router(
+    Router("initialize", endpoint=initialize, methods=["GET"]),
+    Route("/callback", endpoint=callback, methods=["GET"])
+)

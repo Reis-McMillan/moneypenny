@@ -1,23 +1,22 @@
 import logging
-from datetime import datetime, timezone
 
 import httpx
 import jwt
 
 import config
 from db.auth_cache import AuthCache
-from utils.jwks import get_public_key
+from utils.external_tokens import find_token
 
 logger = logging.getLogger(__name__)
 
 
 async def _ensure_fresh_access_token(
-    username: str,
+    user_id: int,
     auth_cache: AuthCache
 ) -> dict:
-    auth = await auth_cache.get(username)
+    auth = await auth_cache.get(user_id)
     if not auth:
-        raise ValueError(f"No cached auth for user {username}")
+        raise ValueError(f"No cached auth for user {user_id}")
 
     try:
         jwt.decode(
@@ -25,19 +24,19 @@ async def _ensure_fresh_access_token(
             options={"verify_signature": False, "verify_exp": True}
         )
     except jwt.ExpiredSignatureError:
-        logger.info("Access token expired for %s, refreshing", username)
-        auth = await refresh_access_token(username, auth_cache)
+        logger.info("Access token expired for %s, refreshing", auth['email'])
+        auth = await refresh_access_token(user_id, auth_cache)
 
     return auth
 
 
 async def refresh_access_token(
-    username: str,
+    user_id: int,
     auth_cache: AuthCache
 ) -> dict:
-    auth = await auth_cache.get(username)
+    auth = await auth_cache.get(user_id)
     if not auth:
-        raise ValueError(f"No cached auth for user {username}")
+        raise ValueError(f"No cached auth for user {user_id}")
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -57,24 +56,15 @@ async def refresh_access_token(
     auth['access_token'] = data['access_token']
     auth['refresh_token'] = data['refresh_token']
 
-    if 'id_token' in data:
-        decoded = jwt.decode(
-            data['id_token'],
-            await get_public_key(),
-            algorithms=['EdDSA'],
-            audience=config.CLIENT_ID
-        )
-        auth['expires_at'] = datetime.fromtimestamp(decoded['exp'], tz=timezone.utc)
-
     await auth_cache.upsert(auth)
     return auth
 
 
 async def mcp_token_exchange(
-    username: str,
+    user_id: int,
     auth_cache: AuthCache
 ) -> dict:
-    auth = await _ensure_fresh_access_token(username, auth_cache)
+    auth = await _ensure_fresh_access_token(user_id, auth_cache)
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -100,11 +90,12 @@ async def mcp_token_exchange(
 
 
 async def get_external_token(
-    username: str,
+    user_id: int,
     auth_cache: AuthCache,
-    provider_id: str
+    provider_id: str,
+    subject: str
 ) -> dict:
-    auth = await _ensure_fresh_access_token(username, auth_cache)
+    auth = await _ensure_fresh_access_token(user_id, auth_cache)
 
     async with httpx.AsyncClient() as client:
         response = await client.get(
@@ -113,7 +104,8 @@ async def get_external_token(
                 "Authorization": f"Bearer {auth['access_token']}"
             },
             params={
-                "provider_id": provider_id
+                "provider_id": provider_id,
+                "subject": subject
             }
         )
 
@@ -122,8 +114,16 @@ async def get_external_token(
 
     data = response.json()
 
+    data['subject'] = subject
+
     if auth.get('external_tokens') is None:
-        auth['external_tokens'] = {}
-    auth['external_tokens'][provider_id] = data
+        auth['external_tokens'] = []
+
+    existing = find_token(auth['external_tokens'], provider_id, subject)
+    if existing:
+        existing.update(data)
+    else:
+        auth['external_tokens'].append(data)
+
     await auth_cache.upsert(auth)
     return data

@@ -4,6 +4,7 @@ import uuid
 from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.routing import Router, Route
 from sse_starlette.sse import EventSourceResponse
 
 from modules.agent import Agent
@@ -63,3 +64,9 @@ async def get_chat(request: Request):
             if msg.type in ("human", "ai")
         ]
     })
+
+chat_router = Router([
+    Route("/", endpoint=create_chat, methods=["POST"]),
+    Route("/{thread_id}", endpoint=send_message, methods=["POST"]),
+    Route("/{thread_id}", endpoint=get_chat, methods=["GET"])
+])

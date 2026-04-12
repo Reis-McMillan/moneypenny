@@ -8,8 +8,9 @@ from utils.jwks import get_public_key
 
 
 class User(SimpleUser):
-    def __init__(self, username: str, auth: dict):
-        super().__init__(username)
+    def __init__(self, auth: dict):
+        super().__init__(auth['email'])
+        self.user_id = auth['user_id']
         self.access_token = auth['access_token']
         self.refresh_token = auth['refresh_token']
         self.external_tokens = auth.get('external_tokens')
@@ -37,9 +38,9 @@ class BearerToken(AuthenticationBackend):
         except jwt.InvalidTokenError:
             raise AuthenticationError('Invalid auth token.')
 
-        username = decoded['sub']
+        user_id = int(decoded['sub'])
         auth_cache = conn.app.state.db.auth_cache
-        cached_auth = await auth_cache.get(username)
+        cached_auth = await auth_cache.get(user_id)
         if not cached_auth:
             raise AuthenticationError('User session not found.')
-        return AuthCredentials(["authenticated"]), User(username, cached_auth)
+        return AuthCredentials(["authenticated"]), User(cached_auth)
