@@ -8,7 +8,7 @@ from starlette.routing import Router, Route
 from starlette.exceptions import HTTPException
 from urllib.parse import urlencode
 
-import config
+from config import config
 from modules.ingest.service import Service
 from utils.jwks import get_public_key
 
@@ -136,14 +136,7 @@ async def callback(request: Request):
                 if svc_cls:
                     svc_cls(user_id, et['subject']).start()
 
-    return JSONResponse(
-        content={
-            'message': 'Successfully exchanged code for tokens.'
-        }
+    return RedirectResponse(
+        url=f'{config.FRONTEND_ORIGIN}/setup-complete',
+        status_code=302
     )
-
-
-auth_router = Router(
-    Router("initialize", endpoint=initialize, methods=["GET"]),
-    Route("/callback", endpoint=callback, methods=["GET"])
-)

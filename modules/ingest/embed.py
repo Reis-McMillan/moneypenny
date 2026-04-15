@@ -1,11 +1,11 @@
 import asyncio
 import logging
 
-from ollama import AsyncClient
+from openai import AsyncOpenAI
 
 import re
 
-import config
+from config import config
 from db.email import Email
 
 
@@ -56,11 +56,9 @@ def build_metadata_text(email: dict) -> str:
 
 class Embedder:
 
-    EMBEDDING_MODEL = "nomic-embed-text"
-
     def __init__(self, queue: asyncio.Queue, email_db: Email):
         self.queue = queue
-        self.ollama_client = AsyncClient(host="http://localhost:11434")
+        self.client = AsyncOpenAI(base_url=config.VLLM_EMBED_URL, api_key="none")
         self.email_db = email_db
         self.task = None
 
@@ -78,9 +76,11 @@ class Embedder:
     MAX_EMBED_CHARS = 4000
 
     async def _embed(self, text: str) -> list[float]:
-        text = f"search_document: {text}"
-        response = await self.ollama_client.embed(model=self.EMBEDDING_MODEL, input=text[:self.MAX_EMBED_CHARS])
-        return response.embeddings[0]
+        response = await self.client.embeddings.create(
+            model=config.EMBEDDING_MODEL,
+            input=text[:self.MAX_EMBED_CHARS]
+        )
+        return response.data[0].embedding
 
     async def _process_email(self, email: dict):
         email['embedding'] = await self._embed(build_embed_text(email))

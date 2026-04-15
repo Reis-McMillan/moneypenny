@@ -3,7 +3,7 @@ from starlette.authentication import (
     AuthenticationBackend, AuthenticationError, SimpleUser, AuthCredentials
 )
 
-import config
+from config import config
 from utils.jwks import get_public_key
 
 

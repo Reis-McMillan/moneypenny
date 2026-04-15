@@ -1,6 +1,6 @@
 from pymongo.asynchronous.mongo_client import AsyncMongoClient
 
-import config
+from config import config
 
 class Base:
     mongo_uri = config.MONGO_URI

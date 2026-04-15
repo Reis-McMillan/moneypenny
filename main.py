@@ -7,7 +7,7 @@ from starlette.middleware import Middleware
 from starlette.middleware.authentication import AuthenticationMiddleware
 import uvicorn
 
-import config
+from config import config
 from db.email import Email
 from db.auth_cache import AuthCache
 from db.authorization import Authorization
@@ -53,7 +53,7 @@ async def main():
         Route('/auth/initialize', initialize),
         Route('/auth/callback', callback),
         Route('/accounts', get_linked_accounts, methods=['GET']),
-        Route('/accounts', add_linked_account, methods=['POST']),
+        Route('/accounts', add_linked_account, methods=['GET']),
         Route('/chat', create_chat, methods=['POST']),
         Route('/chat/{thread_id}', send_message, methods=['POST']),
         Route('/chat/{thread_id}', get_chat, methods=['GET']),

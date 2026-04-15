@@ -5,8 +5,9 @@ import httpx
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.routing import Router, Route
 
-import config
+from config import config
 from modules.tokens import _ensure_fresh_access_token
 from modules.ingest.service import Service
 from utils.external_tokens import find_token
@@ -89,8 +90,7 @@ async def get_linked_accounts(request: Request):
 
 
 async def add_linked_account(request: Request):
-    body = await request.json()
-    provider_id = body.get('provider_id')
+    provider_id = request.query_params.get('provider_id')
     if not provider_id:
         raise HTTPException(status_code=400, detail='provider_id is required.')
 

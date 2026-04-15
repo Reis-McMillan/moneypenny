@@ -3,7 +3,7 @@ import httpx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from starlette.exceptions import HTTPException
 
-import config
+from config import config
 
 _public_key_cache: Ed25519PublicKey | None = None
 

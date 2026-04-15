@@ -3,7 +3,7 @@ import logging
 import httpx
 import jwt
 
-import config
+from config import config
 from db.auth_cache import AuthCache
 from utils.external_tokens import find_token
 

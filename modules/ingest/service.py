@@ -6,7 +6,7 @@ import logging
 
 import trafilatura
 
-import config
+from config import config
 from db.auth_cache import AuthCache
 from db.email import Email
 from modules.tokens import get_external_token

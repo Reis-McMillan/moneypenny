@@ -64,9 +64,3 @@ async def get_chat(request: Request):
             if msg.type in ("human", "ai")
         ]
     })
-
-chat_router = Router([
-    Route("/", endpoint=create_chat, methods=["POST"]),
-    Route("/{thread_id}", endpoint=send_message, methods=["POST"]),
-    Route("/{thread_id}", endpoint=get_chat, methods=["GET"])
-])

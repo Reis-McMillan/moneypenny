@@ -1,16 +1,16 @@
 import logging
 
 import jwt
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent, AgentState
 from langchain.tools import tool
 from langgraph.checkpoint.mongodb import MongoDBSaver
 from pymongo import MongoClient
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from ollama import AsyncClient
+from openai import AsyncOpenAI
 from typing_extensions import NotRequired
 
-import config
+from config import config
 from db.email import Email
 from db.auth_cache import AuthCache
 from modules.tokens import mcp_token_exchange
@@ -41,18 +41,17 @@ class Agent:
 
     Be concise and helpful. Ignore emails which are not relevant to the question."""
 
-    EMBEDDING_MODEL = "nomic-embed-text"
-
-    def __init__(self, ollama_client, email_db, tools, thread_id, username, auth_cache):
-        self.ollama_client = ollama_client
+    def __init__(self, embed_client, email_db, tools, thread_id, username, auth_cache):
+        self.embed_client = embed_client
         self.email_db = email_db
         self.username = username
         self.auth_cache = auth_cache
         self.config = {"configurable": {"thread_id": thread_id}}
 
-        self.llm = ChatOllama(
-            model="llama3.1",
-            base_url=config.OLLAMA_HOST
+        self.llm = ChatOpenAI(
+            model=config.CHAT_MODEL,
+            base_url=config.VLLM_CHAT_URL,
+            api_key="none",
         )
 
         tools.append(self._make_search_tool())
@@ -67,17 +66,17 @@ class Agent:
         )
 
     def _make_search_tool(self):
-        ollama_client = self.ollama_client
+        embed_client = self.embed_client
         email_db = self.email_db
-        embedding_model = self.EMBEDDING_MODEL
 
         @tool
         async def search_emails(query: str) -> str:
             """Search the user's emails by semantic similarity. Use this to find emails about a topic, from a sender, or matching a description."""
             logger.info(f"search_emails called with query: {query}")
-            prefixed_query = f"search_query: {query}"
-            response = await ollama_client.embed(model=embedding_model, input=prefixed_query)
-            embedding = response.embeddings[0]
+            response = await embed_client.embeddings.create(
+                model=config.EMBEDDING_MODEL, input=query
+            )
+            embedding = response.data[0].embedding
             results = await email_db.combined_search(embedding, query=query)
 
             logger.info(f"search returned {len(results)} results")
@@ -105,7 +104,7 @@ class Agent:
         email_db = Email()
         await email_db.ensure_search_index()
 
-        ollama_client = AsyncClient(host=config.OLLAMA_HOST)
+        embed_client = AsyncOpenAI(base_url=config.VLLM_EMBED_URL, api_key="none")
 
         mcp_token = await cls._ensure_mcp_token(username, auth_cache)
 
@@ -119,7 +118,7 @@ class Agent:
 
         tools = await mcp_client.get_tools()
 
-        return cls(ollama_client, email_db, tools, thread_id, username, auth_cache)
+        return cls(embed_client, email_db, tools, thread_id, username, auth_cache)
 
     @staticmethod
     async def _ensure_mcp_token(username, auth_cache):
