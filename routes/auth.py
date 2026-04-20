@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import logging
 import httpx
 import jwt
 import secrets
@@ -8,8 +9,11 @@ from starlette.routing import Router, Route
 from starlette.exceptions import HTTPException
 from urllib.parse import urlencode
 
+logger = logging.getLogger(__name__)
+
 from config import config
 from modules.ingest.service import Service
+from modules.tokens import mcp_token_exchange
 from utils.jwks import get_public_key
 
 
@@ -33,10 +37,12 @@ def create_auth_url():
 
 async def initialize(request: Request):
     auth_url, state, nonce = create_auth_url()
-
+    
+    return_url = request.query_params.get('return_url')
     await request.app.state.db.authorization.upsert({
         'state': state,
-        'nonce': nonce
+        'nonce': nonce,
+        'return_url': return_url
     })
 
     return RedirectResponse(
@@ -49,7 +55,6 @@ async def callback(request: Request):
     error = request.query_params.get('error')
     if error:
         raise HTTPException(status_code=400, detail="Login failed.")
-
     code = request.query_params.get('code')
     if not code:
         raise HTTPException(status_code=400, detail="Authorization code required.")
@@ -95,10 +100,10 @@ async def callback(request: Request):
     if external_tokens:
         for t in external_tokens:
             async with httpx.AsyncClient() as client:
-                response = await client.post(
+                response = await client.get(
                     f'{config.AUTH_URL}/federation/tokens',
                     headers={
-                        'Authorizatoin': f'Bearer {decoded['access_token']}'
+                        'Authorization': f'Bearer {tokens["access_token"]}'
                     },
                     params={
                         'provider_id': t['provider_id'],
@@ -107,16 +112,16 @@ async def callback(request: Request):
                 )
             
             if response.status_code != 200:
-                # to-do: add logging that request failed
-                pass
+                logger.error(f"Failed to fetch federation token for {t['provider_id']}: {response.status_code}")
+                continue
 
-            result = await response.json()
+            result = response.json()
             t['access_token'] = result['access_token']
             t['token_type'] = result['token_type']
             t['expires_at'] = result['expires_at']
 
-    await request.app.state.db.auth_cache.upsert({
-        'user_id': decoded['sub'],
+    auth = {
+        'user_id': int(decoded['sub']),
         'email': decoded['email'],
         'roles': decoded.get('roles', []),
         'access_token': tokens['access_token'],
@@ -124,7 +129,9 @@ async def callback(request: Request):
         'mcp_token': None,
         'external_tokens': external_tokens,
         'expires_at': datetime.fromtimestamp(decoded['auth_time'], tz=timezone.utc) + timedelta(days=60) #might change to read form expires field
-    })
+    }
+    auth = await mcp_token_exchange(auth)
+    await request.app.state.db.auth_cache.upsert(auth)
 
     if external_tokens:
         services = request.app.state.services
@@ -136,7 +143,14 @@ async def callback(request: Request):
                 if svc_cls:
                     svc_cls(user_id, et['subject']).start()
 
-    return RedirectResponse(
-        url=f'{config.FRONTEND_ORIGIN}/setup-complete',
-        status_code=302
+    if authorization['return_url']:
+        return RedirectResponse(
+            url=authorization['return_url'],
+            status_code=302
+        )
+    
+    return JSONResponse(
+        content={
+            'message': 'Successfully exchanged code for tokens.'
+        }
     )

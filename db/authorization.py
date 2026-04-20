@@ -1,5 +1,5 @@
-from base import Base
-from voluptuous import Schema, Required
+from db.base import Base
+from voluptuous import Schema, Required, Any
 
 
 class Authorization(Base):
@@ -10,7 +10,8 @@ class Authorization(Base):
 
         self.schema = Schema({
             Required('state'): str,
-            Required('nonce'): str
+            Required('nonce'): str,
+            Required('return_url'): Any(str, None)
         })
 
     async def ensure_indexes(self):

@@ -1,6 +1,6 @@
 from datetime import datetime
-from base import Base
-from voluptuous import Email, Schema, Required
+from db.base import Base
+from voluptuous import Any, Email as EmailValidator, Schema, Required
 
 
 class AuthCache(Base):
@@ -11,13 +11,13 @@ class AuthCache(Base):
 
         self.schema = Schema({
             Required('user_id'): int,
-            Required('email'): Email(),
-            Required('roles'): list[str],
+            Required('email'): EmailValidator(),
+            Required('roles'): [str],
             Required('access_token'): str,
             Required('refresh_token'): str,
-            Required('mcp_token'): str | None,
-            Required('external_tokens'): list[dict] | None,
-            Required('expires_at'): datetime
+            Required('mcp_token'): Any(str, None),
+            Required('external_tokens'): Any([dict], None),
+            Required('expires_at'): datetime,
         })
 
     async def ensure_indexes(self):

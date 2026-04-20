@@ -11,12 +11,18 @@ from openai import AsyncOpenAI
 from typing_extensions import NotRequired
 
 from config import config
-from db.email import Email
 from db.auth_cache import AuthCache
-from modules.tokens import mcp_token_exchange
+# from modules.tokens import mcp_token_exchange, mcp_auth
+from middleware.authenticated import User
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class MCPConsentRequired(Exception):
+    def __init__(self, redirect_url):
+        self.redirect_url = redirect_url
+        super().__init__(f"MCP consent required: {redirect_url}")
 
 
 class ChatState(AgentState):
@@ -41,11 +47,10 @@ class Agent:
 
     Be concise and helpful. Ignore emails which are not relevant to the question."""
 
-    def __init__(self, embed_client, email_db, tools, thread_id, username, auth_cache):
+    def __init__(self, embed_client, email_db, tools, thread_id, user: User):
         self.embed_client = embed_client
         self.email_db = email_db
-        self.username = username
-        self.auth_cache = auth_cache
+        self.user = user
         self.config = {"configurable": {"thread_id": thread_id}}
 
         self.llm = ChatOpenAI(
@@ -100,14 +105,10 @@ class Agent:
         return search_emails
 
     @classmethod
-    async def build(cls, thread_id, username, auth_cache):
-        email_db = Email()
-        await email_db.ensure_search_index()
-
+    async def build(cls, thread_id, email_db, user: User):
         embed_client = AsyncOpenAI(base_url=config.VLLM_EMBED_URL, api_key="none")
-
-        mcp_token = await cls._ensure_mcp_token(username, auth_cache)
-
+        mcp_token = user.mcp_token
+        
         mcp_client = MultiServerMCPClient({
             'email': {
                 'transport': 'http',
@@ -118,24 +119,25 @@ class Agent:
 
         tools = await mcp_client.get_tools()
 
-        return cls(embed_client, email_db, tools, thread_id, username, auth_cache)
+        return cls(embed_client, email_db, tools, thread_id, user)
 
-    @staticmethod
-    async def _ensure_mcp_token(username, auth_cache):
-        auth = await auth_cache.get(username)
-        if not auth:
-            raise ValueError(f"No cached auth for user {username}")
+    # @staticmethod
+    # async def _ensure_mcp_token(user_id, auth_cache):
+    #     auth = await auth_cache.get(user_id)
+    #     if not auth:
+    #         raise ValueError(f"No cached auth for user {user_id}")
 
-        mcp_token = auth.get('mcp_token')
-        if mcp_token:
-            try:
-                jwt.decode(mcp_token, options={"verify_signature": False, "verify_exp": True})
-                return mcp_token
-            except jwt.ExpiredSignatureError:
-                logger.info("MCP token expired for %s, exchanging", username)
+    #     mcp_token = auth.get('mcp_token')
+    #     if mcp_token:
+    #         try:
+    #             jwt.decode(mcp_token, options={"verify_signature": False, "verify_exp": True})
+    #             return mcp_token
+    #         except jwt.ExpiredSignatureError:
+    #             logger.info("MCP token expired for %s, exchanging", user_id)
 
-        auth = await mcp_token_exchange(username, auth_cache)
-        return auth['mcp_token']
+    #     auth = await mcp_token_exchange(user_id, auth_cache)
+
+    #     return auth['mcp_token']
 
     async def chat(self, message):
         async for event in self.agent.astream_events(

@@ -1,19 +1,35 @@
 services:
   mongodb:
     image: mongodb/mongodb-atlas-local:8.0
-    hostname: localhost
     ports:
       - "27017:27017"
     environment:
-      - MONGODB_INITDB_DATABASE=jmail
+      - MONGODB_INITDB_DATABASE=moneypenny
 
   mcp:
-    image: gmail-mcp-server:latest
-    ports:
-      - "8000:8000"
-    volumes:
-      - ../.google:/app/.google
+    image: email-mcp-server:latest
+    network_mode: host
+    depends_on:
+      - mongodb
     environment:
-      - CREDS_FILE_PATH=.google/client_creds.json
-      - TOKEN_PATH=.google/app_tokens.json
+      - EMAIL_MCP_CLIENT_ID=${EMAIL_MCP_CLIENT_ID}
+      - EMAIL_MCP_CLIENT_SECRET=${EMAIL_MCP_CLIENT_SECRET}
+      - AUTH_URL=${AUTH_URL}
+      - JWKS_URL=${JWKS_URL}
 
+  moneypenny:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ENV: dev
+    network_mode: host
+    depends_on:
+      - mongodb
+      - mcp
+    environment:
+      - MONEYPENNY_CLIENT_ID=${MONEYPENNY_CLIENT_ID}
+      - MONEYPENNY_CLIENT_SECRET=${MONEYPENNY_CLIENT_SECRET}
+      - EMAIL_MCP_CLIENT_ID=${EMAIL_MCP_CLIENT_ID}
+      - AUTH_URL=${AUTH_URL}
+      - JWKS_URL=${JWKS_URL}

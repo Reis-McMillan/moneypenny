@@ -4,11 +4,9 @@ import re
 from datetime import datetime
 
 from pymongo.operations import SearchIndexModel
-from voluptuous import Email, Schema, Required, Optional, All, Coerce
+from voluptuous import Email as EmailValidator, Schema, Required, Optional, All, Coerce
 
-from config import MONGO_URI
-from config import DB_NAME
-from base import Base
+from db.base import Base
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +22,8 @@ class Email(Base):
 
         self.schema = Schema({
             Required('id'): str,
-            Required('owner'): Email(),
-            Required('from'): Email(),
+            Required('owner'): EmailValidator(),
+            Required('from'): EmailValidator(),
             Required('subject'): str,
             Required('body'): str,
             Required('embedding'): All(list, [Coerce(float)]),

@@ -1,0 +1,11 @@
+.venv
+.git
+.claude
+__pycache__
+**/__pycache__
+*.pyc
+ollama
+mongodb
+mongodb-config
+config/config.py
+deploy

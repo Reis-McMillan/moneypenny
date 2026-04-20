@@ -8,7 +8,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Router, Route
 
 from config import config
-from modules.tokens import _ensure_fresh_access_token
+from db.auth_cache import AuthCache
+from middleware.authenticated import User
+from modules.tokens import token_expired, refresh_access_token
 from modules.ingest.service import Service
 from utils.external_tokens import find_token
 
@@ -16,11 +18,16 @@ logger = logging.getLogger(__name__)
 
 
 async def get_linked_accounts(request: Request):
-    auth_cache = request.app.state.db.auth_cache
-    user_id = request.user.user_id
-
-    auth = await _ensure_fresh_access_token(user_id, auth_cache)
-    headers = {'Authorization': f"Bearer {auth['access_token']}"}
+    auth_cache: AuthCache = request.app.state.db.auth_cache
+    user: User = request.user
+    
+    if token_expired(user.access_token):
+        auth = await auth_cache.get(user.user_id)
+        auth = await refresh_access_token(auth)
+        user.access_token = auth['access_token']
+        user.external_tokens = auth.get('external_tokens')
+    
+    headers = {'Authorization': f"Bearer {user.access_token}"}
 
     async with httpx.AsyncClient() as client:
         response = await client.get(
@@ -33,7 +40,7 @@ async def get_linked_accounts(request: Request):
 
         providers = response.json()
 
-        cached = auth.get('external_tokens') or []
+        cached = user.external_tokens or []
         new_tokens: list[dict] = []
         changed = False
 
@@ -68,6 +75,7 @@ async def get_linked_accounts(request: Request):
             changed = True
 
     if changed:
+        auth = await auth_cache.get(user.user_id)
         auth['external_tokens'] = new_tokens or None
         await auth_cache.upsert(auth)
 
@@ -76,15 +84,15 @@ async def get_linked_accounts(request: Request):
 
     for key in list(services):
         uid, pid = key
-        if uid == user_id and pid not in provider_ids_now:
+        if uid == user.user_id and pid not in provider_ids_now:
             services[key].stop()
 
     for entry in providers:
-        key = (user_id, entry['provider_id'])
+        key = (user.user_id, entry['provider_id'])
         if key not in services:
             svc_cls = Service.for_provider(entry['provider_id'])
             if svc_cls:
-                svc_cls(user_id, entry['subject']).start()
+                svc_cls(user.user_id, entry['subject']).start()
 
     return JSONResponse(content=providers)
 

@@ -9,35 +9,41 @@ from utils.external_tokens import find_token
 
 logger = logging.getLogger(__name__)
 
+async def mcp_auth():
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{config.MCP_URL}/auth/initialize"
+        )
+    
+    redirect_url = response.headers.get('Location')
+    if not redirect_url:
+        raise RuntimeError('MCP authentication failed.')
+    return redirect_url
 
-async def _ensure_fresh_access_token(
-    user_id: int,
-    auth_cache: AuthCache
-) -> dict:
-    auth = await auth_cache.get(user_id)
-    if not auth:
-        raise ValueError(f"No cached auth for user {user_id}")
 
+def token_expired(token: str | bytes):
     try:
         jwt.decode(
-            auth['access_token'],
+            token,
             options={"verify_signature": False, "verify_exp": True}
         )
     except jwt.ExpiredSignatureError:
+        return True
+
+
+async def _ensure_fresh_access_token(
+    auth: dict
+) -> dict:
+    if token_expired(auth['access_token']):
         logger.info("Access token expired for %s, refreshing", auth['email'])
-        auth = await refresh_access_token(user_id, auth_cache)
+        auth = await refresh_access_token(auth)
 
     return auth
 
 
 async def refresh_access_token(
-    user_id: int,
-    auth_cache: AuthCache
+    auth: dict
 ) -> dict:
-    auth = await auth_cache.get(user_id)
-    if not auth:
-        raise ValueError(f"No cached auth for user {user_id}")
-
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f'{config.AUTH_URL}/token',
@@ -56,16 +62,26 @@ async def refresh_access_token(
     auth['access_token'] = data['access_token']
     auth['refresh_token'] = data['refresh_token']
 
-    await auth_cache.upsert(auth)
     return auth
 
 
-async def mcp_token_exchange(
-    user_id: int,
-    auth_cache: AuthCache
-) -> dict:
-    auth = await _ensure_fresh_access_token(user_id, auth_cache)
+async def authorize_mcp():
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{config.MCP_URL}/auth/initialize")
+    
+    if not response.status_code == 302:
+        error_msg = "Unable to fetch MCP authorization initialization at %s".format(
+            "{config.MCP_URL}/auth/initialize"
+        )
+        return RuntimeError(error_msg)
+    
+    return response.headers['Location']
 
+
+async def mcp_token_exchange(
+    auth: dict
+) -> dict:
+    auth = await _ensure_fresh_access_token(auth)
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{config.AUTH_URL}/token",
@@ -81,21 +97,22 @@ async def mcp_token_exchange(
         )
 
     if not response.is_success:
-        raise RuntimeError(f"MCP token exchange failed: {response.status_code} {response.text}")
+        logger.warning(
+            f"MCP token exchange failed: {response.status_code} {response.text}"
+        )
+        return auth
 
     data = response.json()
     auth['mcp_token'] = data['access_token']
-    await auth_cache.upsert(auth)
     return auth
 
 
 async def get_external_token(
-    user_id: int,
-    auth_cache: AuthCache,
+    auth: dict,
     provider_id: str,
     subject: str
 ) -> dict:
-    auth = await _ensure_fresh_access_token(user_id, auth_cache)
+    auth = await _ensure_fresh_access_token(auth)
 
     async with httpx.AsyncClient() as client:
         response = await client.get(
@@ -125,5 +142,4 @@ async def get_external_token(
     else:
         auth['external_tokens'].append(data)
 
-    await auth_cache.upsert(auth)
-    return data
+    auth

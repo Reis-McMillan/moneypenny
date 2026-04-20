@@ -7,7 +7,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Router, Route
 from sse_starlette.sse import EventSourceResponse
 
+from config import config
 from modules.agent import Agent
+from middleware.authenticated import User
 
 
 class ChatBody(BaseModel):
@@ -16,11 +18,21 @@ class ChatBody(BaseModel):
 
 async def create_chat(request: Request):
     body = ChatBody(**await request.json())
-    username = request.user.username
-    auth_cache = request.app.state.db.auth_cache
+    user: User = request.user
+
+    if not user.mcp_token:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "setup_required": True,
+                "redirect_url": f"{config.MCP_URL}/auth/initialize"
+            }
+        )
+
     thread_id = str(uuid.uuid4())
 
-    agent = await Agent.build(thread_id, username, auth_cache)
+    email_db = request.app.state.db.email
+    agent = await Agent.build(thread_id, email_db, user)
 
     async def event_stream():
         async for token in agent.chat(body.message):
@@ -35,10 +47,19 @@ async def create_chat(request: Request):
 async def send_message(request: Request):
     body = ChatBody(**await request.json())
     thread_id = request.path_params['thread_id']
-    username = request.user.username
-    auth_cache = request.app.state.db.auth_cache
+    user: User = request.user
 
-    agent = await Agent.build(thread_id, username, auth_cache)
+    if not user.mcp_token:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "setup_required": True,
+                "redirect_url": f"{config.MCP_URL}/auth/initialize"
+            }
+        )
+    
+    email_db = request.app.state.db.email
+    agent = await Agent.build(thread_id, email_db, user)
 
     async def event_stream():
         async for token in agent.chat(body.message):
@@ -49,10 +70,10 @@ async def send_message(request: Request):
 
 async def get_chat(request: Request):
     thread_id = request.path_params['thread_id']
-    username = request.user.username
-    auth_cache = request.app.state.db.auth_cache
+    user = request.user
 
-    agent = await Agent.build(thread_id, username, auth_cache)
+    email_db = request.app.state.db.email
+    agent = await Agent.build(thread_id, email_db, user)
     messages = agent.get_history()
 
     return JSONResponse({
