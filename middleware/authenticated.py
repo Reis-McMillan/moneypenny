@@ -7,7 +7,7 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from config import config
 from db.auth_cache import AuthCache
 from utils.jwks import get_public_key
-from modules.tokens import mcp_token_exchange, token_expired
+from modules.tokens import VerysClient
 
 
 class User(SimpleUser):
@@ -18,6 +18,7 @@ class User(SimpleUser):
         self.refresh_token = auth['refresh_token']
         self.external_tokens = auth.get('external_tokens')
         self.mcp_token = auth['mcp_token']
+        self.auth = auth
 
 
 class AuthCacheMissing(AuthenticationError):
@@ -55,11 +56,11 @@ class BearerToken(AuthenticationBackend):
         if not auth:
             raise AuthCacheMissing('User session not found.')
         
+        verys_client: VerysClient = conn.app.state.verys_client
        
         mcp_token = auth.get('mcp_token')
-        if (not mcp_token or token_expired(mcp_token)):
-            auth = await mcp_token_exchange(auth)
-            await auth_cache.upsert(auth)
+        if (not mcp_token or verys_client.token_expired(mcp_token)):
+            auth = await verys_client.mcp_token_exchange(auth)
 
         return AuthCredentials(["authenticated"]), User(auth)
     

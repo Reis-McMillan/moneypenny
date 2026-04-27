@@ -9,10 +9,16 @@ import trafilatura
 from config import config
 from db.auth_cache import AuthCache
 from db.email import Email
-from modules.tokens import get_external_token
-from utils.external_tokens import find_token
+from modules.tokens import VerysClient
 
 logger = logging.getLogger(__name__)
+
+
+def _find_token(tokens: list[dict], provider_id: str, subject: str) -> dict | None:
+    for t in tokens:
+        if t.get('provider_id') == provider_id and t.get('subject') == subject:
+            return t
+    return None
 
 
 class Service(ABC):
@@ -33,6 +39,7 @@ class Service(ABC):
     queue: asyncio.Queue
     auth_cache: AuthCache
     email_db: Email
+    verys_client: VerysClient
     _services: dict
     _registry: dict[str, type['Service']] = {}
 
@@ -66,29 +73,41 @@ class Service(ABC):
     def set_services(cls, services: dict):
         cls._services = services
 
+    @classmethod
+    def set_verys_client(cls, verys_client: VerysClient):
+        cls.verys_client = verys_client
+
     async def get_token(self) -> str:
         auth = await self.auth_cache.get(self.user_id)
         if not auth:
             raise ValueError(f"No cached auth for user {self.user_id}")
 
-        token = find_token(
+        token = _find_token(
             auth.get('external_tokens') or [],
             self.provider_id, self.subject
         )
 
         if token:
             expires_at = token.get('expires_at')
-            if expires_at:
-                exp_dt = datetime.fromisoformat(expires_at)
-                if exp_dt > datetime.now(timezone.utc):
-                    return token['access_token']
-            else:
+            if expires_at and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if not expires_at or expires_at > datetime.now(timezone.utc):
                 return token['access_token']
+            auth = await self.verys_client.get_external_tokens(
+                auth, token_id=token['token_id']
+            )
+        else:
+            auth = await self.verys_client.get_external_tokens(auth)
 
-        refreshed = await get_external_token(
-            self.user_id, self.auth_cache, self.provider_id, self.subject
+        token = _find_token(
+            auth.get('external_tokens') or [],
+            self.provider_id, self.subject
         )
-        return refreshed['access_token']
+        if not token:
+            raise ValueError(
+                f"No external token for {self.provider_id}/{self.subject}"
+            )
+        return token['access_token']
 
     @staticmethod
     def _decode_part(parts: list[dict], mime_type: str) -> str | None:
@@ -166,7 +185,7 @@ class Service(ABC):
             if not auth:
                 break
 
-            token = find_token(
+            token = _find_token(
                 auth.get('external_tokens') or [],
                 self.provider_id, self.subject
             )

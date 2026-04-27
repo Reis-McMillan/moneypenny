@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 from config import config
 from modules.ingest.service import Service
-from modules.tokens import mcp_token_exchange
+from modules.tokens import VerysClient
 from utils.jwks import get_public_key
 
 
@@ -96,47 +96,26 @@ async def callback(request: Request):
     if decoded.get('nonce') != authorization['nonce']:
         raise HTTPException(status_code=400, detail='Nonce missing or nonce mismatch.')
 
-    external_tokens = decoded.get('tokens', [])
-    if external_tokens:
-        for t in external_tokens:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f'{config.AUTH_URL}/federation/tokens',
-                    headers={
-                        'Authorization': f'Bearer {tokens["access_token"]}'
-                    },
-                    params={
-                        'provider_id': t['provider_id'],
-                        'subject': t['subject']
-                    }
-                )
-            
-            if response.status_code != 200:
-                logger.error(f"Failed to fetch federation token for {t['provider_id']}: {response.status_code}")
-                continue
-
-            result = response.json()
-            t['access_token'] = result['access_token']
-            t['token_type'] = result['token_type']
-            t['expires_at'] = result['expires_at']
-
+    verys_client : VerysClient = request.app.state.verys_client
     auth = {
         'user_id': int(decoded['sub']),
         'email': decoded['email'],
-        'roles': decoded.get('roles', []),
+        'roles': decoded['roles'],
         'access_token': tokens['access_token'],
         'refresh_token': tokens['refresh_token'],
+        'expires_at': (
+            datetime.fromtimestamp(
+                decoded['auth_time'], tz=timezone.utc
+            ) + timedelta(days=60)),
         'mcp_token': None,
-        'external_tokens': external_tokens,
-        'expires_at': datetime.fromtimestamp(decoded['auth_time'], tz=timezone.utc) + timedelta(days=60) #might change to read form expires field
+        'external_tokens': None
     }
-    auth = await mcp_token_exchange(auth)
-    await request.app.state.db.auth_cache.upsert(auth)
-
-    if external_tokens:
-        services = request.app.state.services
+    auth = await verys_client.mcp_token_exchange(auth)
+    auth = await verys_client.get_external_tokens(auth)
+    if auth['external_tokens']:
+        services: dict = request.app.state.services
         user_id = int(decoded['sub'])
-        for et in external_tokens:
+        for et in auth['external_tokens']:
             key = (user_id, et['provider_id'])
             if key not in services:
                 svc_cls = Service.for_provider(et['provider_id'])

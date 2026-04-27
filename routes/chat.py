@@ -7,7 +7,6 @@ from starlette.responses import JSONResponse
 from starlette.routing import Router, Route
 from sse_starlette.sse import EventSourceResponse
 
-from config import config
 from modules.agent import Agent
 from middleware.authenticated import User
 
@@ -25,7 +24,7 @@ async def create_chat(request: Request):
             status_code=403,
             content={
                 "setup_required": True,
-                "redirect_url": f"{config.MCP_URL}/auth/initialize"
+                "redirect_url": request.app.state.verys_client.mcp_auth_url
             }
         )
 
@@ -54,10 +53,10 @@ async def send_message(request: Request):
             status_code=403,
             content={
                 "setup_required": True,
-                "redirect_url": f"{config.MCP_URL}/auth/initialize"
+                "redirect_url": request.app.state.verys_client.mcp_auth_url
             }
         )
-    
+
     email_db = request.app.state.db.email
     agent = await Agent.build(thread_id, email_db, user)
 

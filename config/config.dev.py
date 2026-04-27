@@ -14,7 +14,7 @@ MONGO_URI = 'mongodb://localhost:27017?directConnection=true'
 DB_NAME = 'moneypenny'
 VLLM_CHAT_URL = os.environ.get('VLLM_CHAT_URL', 'http://192.168.1.72:8000/v1')
 VLLM_EMBED_URL = os.environ.get('VLLM_EMBED_URL', 'http://192.168.1.72:8001/v1')
-CHAT_MODEL = 'google/gemma-3-12b-it'
+CHAT_MODEL = 'google/gemma-4-E4B-it'
 EMBEDDING_MODEL = 'google/embeddinggemma-300m'
 FRONTEND_ORIGIN = 'http://localhost:5173'
 MCP_URL = 'http://localhost:8000'

@@ -15,9 +15,17 @@ class AuthCache(Base):
             Required('roles'): [str],
             Required('access_token'): str,
             Required('refresh_token'): str,
-            Required('mcp_token'): Any(str, None),
-            Required('external_tokens'): Any([dict], None),
             Required('expires_at'): datetime,
+            Required('mcp_token'): Any(str, None),
+            Required('external_tokens'): Any([{
+                Required('token_id'): int,
+                Required('provider_id'): str,
+                Required('subject'): str,
+                Required('access_token'): str,
+                Required('token_type'): str,
+                Required('expires_at'): Any(datetime, None),
+                Required('email'): Any(EmailValidator(), None)
+            }], None)
         })
 
     async def ensure_indexes(self):

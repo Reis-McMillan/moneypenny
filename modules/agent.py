@@ -12,7 +12,6 @@ from typing_extensions import NotRequired
 
 from config import config
 from db.auth_cache import AuthCache
-# from modules.tokens import mcp_token_exchange, mcp_auth
 from middleware.authenticated import User
 
 logging.basicConfig(level=logging.INFO)
@@ -120,24 +119,6 @@ class Agent:
         tools = await mcp_client.get_tools()
 
         return cls(embed_client, email_db, tools, thread_id, user)
-
-    # @staticmethod
-    # async def _ensure_mcp_token(user_id, auth_cache):
-    #     auth = await auth_cache.get(user_id)
-    #     if not auth:
-    #         raise ValueError(f"No cached auth for user {user_id}")
-
-    #     mcp_token = auth.get('mcp_token')
-    #     if mcp_token:
-    #         try:
-    #             jwt.decode(mcp_token, options={"verify_signature": False, "verify_exp": True})
-    #             return mcp_token
-    #         except jwt.ExpiredSignatureError:
-    #             logger.info("MCP token expired for %s, exchanging", user_id)
-
-    #     auth = await mcp_token_exchange(user_id, auth_cache)
-
-    #     return auth['mcp_token']
 
     async def chat(self, message):
         async for event in self.agent.astream_events(
