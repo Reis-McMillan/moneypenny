@@ -52,6 +52,10 @@ class Service(ABC):
         self.user_id = user_id
         self.subject = subject
         self.task: asyncio.Task | None = None
+        self.currently_ingesting: bool = False
+        self.last_run_at: datetime | None = None
+        self.last_error: str | None = None
+        self.last_error_at: datetime | None = None
 
     @classmethod
     def for_provider(cls, provider_id: str) -> type['Service'] | None:
@@ -156,6 +160,8 @@ class Service(ABC):
         doc = {
             'id': raw['id'],
             'owner': owner,
+            'provider_id': self.provider_id,
+            'account_subject': self.subject,
             'subject': headers.get('subject', ''),
             'from': headers.get('from', ''),
             'body': body,
@@ -192,14 +198,22 @@ class Service(ABC):
             if not token:
                 break
 
+            self.currently_ingesting = True
             try:
                 last_dt = await self.email_db.get_last_dt(auth['email'])
                 await self.queue_emails(last_dt, auth['email'])
-            except Exception:
+                self.last_run_at = datetime.now(timezone.utc)
+                self.last_error = None
+                self.last_error_at = None
+            except Exception as e:
+                self.last_error = repr(e)
+                self.last_error_at = datetime.now(timezone.utc)
                 logger.exception(
                     "Error in service %s for user %s",
                     self.provider_id, self.user_id
                 )
+            finally:
+                self.currently_ingesting = False
 
             await asyncio.sleep(config.EMAIL_CHECK_INTERVAL)
 

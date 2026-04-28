@@ -16,6 +16,7 @@ from middleware.authenticated import BearerToken, on_authenticated_error
 from routes.auth import initialize, callback
 from routes.accounts import get_linked_accounts, refresh_linked_accounts, add_linked_account
 from routes.chat import create_chat, send_message, get_chat
+from routes.ingest import get_counts, get_status
 from modules.ingest.embed import Embedder
 from modules.ingest.service import Service
 from modules.ingest.gmail_service import GmailService  # noqa: F401 — registers provider
@@ -69,6 +70,8 @@ routes = [
     Route('/chat', create_chat, methods=['POST']),
     Route('/chat/{thread_id}', send_message, methods=['POST']),
     Route('/chat/{thread_id}', get_chat, methods=['GET']),
+    Route('/ingest/counts', get_counts, methods=['GET']),
+    Route('/ingest/status', get_status, methods=['GET']),
 ]
 
 app = Starlette(

@@ -18,11 +18,13 @@ class Email(Base):
     def __init__(self):
         self.collection_name = 'emails'
         self.collection = self.client[self.db_name][self.collection_name]
-        self.identity_fields = ['id']
+        self.identity_fields = ['id', 'owner']
 
         self.schema = Schema({
             Required('id'): str,
             Required('owner'): EmailValidator(),
+            Required('provider_id'): str,
+            Required('account_subject'): str,
             Required('from'): EmailValidator(),
             Required('subject'): str,
             Required('body'): str,
@@ -88,6 +90,12 @@ class Email(Base):
 
     async def exists(self, email_id: str) -> bool:
         return await self.collection.find_one({'id': email_id}, {'_id': 1}) is not None
+
+    async def count(self, owner: str, provider_id: str | None = None) -> int:
+        query: dict = {'owner': owner}
+        if provider_id is not None:
+            query['provider_id'] = provider_id
+        return await self.collection.count_documents(query)
 
     async def get_all(self) -> list[dict]:
         cursor = self.collection.find({}, {'_id': 0, 'embedding': 0})

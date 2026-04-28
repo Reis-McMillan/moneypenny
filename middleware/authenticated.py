@@ -18,7 +18,12 @@ class User(SimpleUser):
         self.refresh_token = auth['refresh_token']
         self.external_tokens = auth.get('external_tokens')
         self.mcp_token = auth['mcp_token']
+        self.roles = auth.get('roles', [])
         self.auth = auth
+
+    @property
+    def is_admin(self) -> bool:
+        return 'admin' in self.roles
 
 
 class AuthCacheMissing(AuthenticationError):
