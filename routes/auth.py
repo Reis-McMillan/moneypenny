@@ -5,7 +5,6 @@ import jwt
 import secrets
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
-from starlette.routing import Router, Route
 from starlette.exceptions import HTTPException
 from urllib.parse import urlencode
 
@@ -96,6 +95,9 @@ async def callback(request: Request):
     if decoded.get('nonce') != authorization['nonce']:
         raise HTTPException(status_code=400, detail='Nonce missing or nonce mismatch.')
 
+    return_url = authorization['return_url']
+    await request.app.state.db.authorization.delete(state)
+
     verys_client : VerysClient = request.app.state.verys_client
     auth = {
         'user_id': int(decoded['sub']),
@@ -122,9 +124,9 @@ async def callback(request: Request):
                 if svc_cls:
                     svc_cls(user_id, et['subject']).start()
 
-    if authorization['return_url']:
+    if return_url:
         return RedirectResponse(
-            url=authorization['return_url'],
+            url=return_url,
             status_code=302
         )
     

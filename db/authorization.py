@@ -20,3 +20,6 @@ class Authorization(Base):
     async def get(self, state: str) -> dict | None:
         return await self.collection.find_one({'state': state}, {'_id': 0})
 
+    async def delete(self, state: str) -> None:
+        await self.collection.delete_one({'state': state})
+

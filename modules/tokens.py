@@ -108,7 +108,7 @@ class VerysClient:
             if auth['external_tokens'] is None:
                 auth['external_tokens'] = [ext_token]
                 return auth
-            token_ids: list = map(lambda t: t['token_id'], auth['external_tokens'])
+            token_ids: list = list(map(lambda t: t['token_id'], auth['external_tokens']))
             try:
                 idx = token_ids.index(ext_token['token_id'])
                 auth['external_tokens'][idx] = ext_token
