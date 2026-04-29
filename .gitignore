@@ -3,3 +3,4 @@ ollama
 mongodb
 mongodb-config
 config/config.py
+__pycache__

@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from urllib.parse import urlencode
 
 from starlette.exceptions import HTTPException
@@ -12,12 +13,20 @@ from modules.tokens import VerysClient
 logger = logging.getLogger(__name__)
 
 
+def _serialize_token(token: dict) -> dict:
+    out = dict(token)
+    expires_at = out.get('expires_at')
+    if isinstance(expires_at, datetime):
+        out['expires_at'] = expires_at.isoformat()
+    return out
+
+
 async def get_linked_accounts(request: Request):
     user: User = request.user
 
     external_tokens = user.external_tokens or []
     return JSONResponse(
-        content=external_tokens
+        content=[_serialize_token(t) for t in external_tokens]
     )
 
 
@@ -28,7 +37,7 @@ async def refresh_linked_accounts(request: Request):
     auth = await verys_client.get_external_tokens(user.auth)
 
     return JSONResponse(
-        content=auth['external_tokens']
+        content=[_serialize_token(t) for t in (auth['external_tokens'] or [])]
     )
 
 

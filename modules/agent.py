@@ -1,5 +1,7 @@
+import json
 import logging
 
+import httpx
 import jwt
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent, AgentState
@@ -24,32 +26,84 @@ class MCPConsentRequired(Exception):
         super().__init__(f"MCP consent required: {redirect_url}")
 
 
+async def _check_mcp_heartbeat(mcp_token: str) -> None:
+    async with httpx.AsyncClient() as client:
+        probe = await client.get(
+            f"{config.MCP_URL.rstrip('/')}/heartbeat",
+            headers={'Authorization': f'Bearer {mcp_token}'},
+            follow_redirects=False,
+        )
+    if probe.status_code == 403:
+        body = probe.json() if 'application/json' in probe.headers.get('content-type', '') else {}
+        if isinstance(body, dict) and body.get('setup_required'):
+            raise MCPConsentRequired(body.get('redirect_url'))
+    if not probe.is_success:
+        raise RuntimeError(
+            f"MCP heartbeat failed: {probe.status_code} {probe.text}"
+        )
+
+
 class ChatState(AgentState):
     title: NotRequired[str]
 
 
 class Agent:
 
-    SYSTEM_PROMPT = """You are an email assistant. You help the user find, understand, and manage their emails.
+    BASE_SYSTEM_PROMPT = """You are an email assistant. You help the user find, understand, and manage their emails.
 
     You have access to these tools:
 
     - search_emails: Search previously ingested emails by semantic similarity. Use this when the user asks about emails they've received, wants summaries, or asks about a topic/sender.
-    - send-email: Sends an email to a recipient. Do not use if the user only asked to draft an email. Drafts must be approved before sending. Args: recipient_id, subject, message.
-    - trash-email: Moves an email to trash. Always confirm with the user before trashing. Args: email_id.
-    - get-unread-emails: Retrieve unread emails. No args.
-    - read-email: Retrieves the content of a given email. Args: email_id.
-    - mark-email-as-read: Marks a given email as read. Args: email_id.
-    - open-email: Opens an email in the browser. Args: email_id.
+    - send-email: Sends an email to a recipient. Do not use if the user only asked to draft an email. Drafts must be approved before sending. Args: token_id, recipient_id, subject, message.
+    - trash-email: Moves an email to trash. Always confirm with the user before trashing. Args: token_id, email_id.
+    - get-unread-emails: Retrieve unread emails. Args: token_id (optional — omit to fan out across all accounts).
+    - read-email: Retrieves the content of a given email. Args: token_id, email_id.
+    - mark-email-as-read: Marks a given email as read. Args: token_id, email_id.
+    - open-email: Opens an email in the browser. Args: token_id, email_id.
+
+    Each email tool (other than search_emails) takes a `token_id` (integer) that identifies which connected email account to act on.
 
     IMPORTANT: Always use the appropriate tool to answer questions. Never make up email content. If no tool returns relevant results, say so.
 
     Be concise and helpful. Ignore emails which are not relevant to the question."""
 
-    def __init__(self, embed_client, email_db, tools, thread_id, user: User):
+    @staticmethod
+    def _build_system_prompt(user: User, token_id: int | None) -> str:
+        external_tokens = user.external_tokens or []
+        if token_id is not None:
+            chosen = next((t for t in external_tokens if t.get("token_id") == token_id), None)
+            email = (chosen or {}).get("email") or (chosen or {}).get("subject") or "unknown"
+            preamble = (
+                f"The user has selected the email account with token_id={token_id} ({email}). "
+                f"Pass token_id={token_id} to every email tool call unless the user explicitly asks about another account."
+            )
+        elif len(external_tokens) == 1:
+            only = external_tokens[0]
+            tid = only.get("token_id")
+            email = only.get("email") or only.get("subject") or "unknown"
+            preamble = (
+                f"The user has exactly one connected email account: token_id={tid} ({email}). "
+                f"Pass token_id={tid} to every email tool call."
+            )
+        else:
+            available = ", ".join(
+                f"token_id={t.get('token_id')} ({t.get('email') or t.get('subject') or 'unknown'})"
+                for t in external_tokens
+            ) or "(none)"
+            preamble = (
+                "The user has not selected a specific account. "
+                f"Their connected accounts: {available}. "
+                "For read tools (get-unread-emails, search_emails) you may operate across all accounts. "
+                "For write/single-target tools (send-email, trash-email, read-email, mark-email-as-read, open-email), "
+                "ask the user which account they mean (by listing emails) before calling."
+            )
+        return preamble + "\n\n" + Agent.BASE_SYSTEM_PROMPT
+
+    def __init__(self, embed_client, email_db, tools, thread_id, user: User, token_id: int | None = None):
         self.embed_client = embed_client
         self.email_db = email_db
         self.user = user
+        self.token_id = token_id
         self.config = {"configurable": {"thread_id": thread_id}}
 
         self.llm = ChatOpenAI(
@@ -63,7 +117,7 @@ class Agent:
 
         self.agent = create_agent(
             model=self.llm,
-            system_prompt=self.SYSTEM_PROMPT,
+            system_prompt=self._build_system_prompt(user, token_id),
             tools=tools,
             checkpointer=checkpointer,
             state_schema=ChatState,
@@ -104,10 +158,12 @@ class Agent:
         return search_emails
 
     @classmethod
-    async def build(cls, thread_id, email_db, user: User):
+    async def build(cls, thread_id, email_db, user: User, token_id: int | None = None):
         embed_client = AsyncOpenAI(base_url=config.VLLM_EMBED_URL, api_key="none")
         mcp_token = user.mcp_token
-        
+
+        await _check_mcp_heartbeat(mcp_token)
+
         mcp_client = MultiServerMCPClient({
             'email': {
                 'transport': 'http',
@@ -118,7 +174,7 @@ class Agent:
 
         tools = await mcp_client.get_tools()
 
-        return cls(embed_client, email_db, tools, thread_id, user)
+        return cls(embed_client, email_db, tools, thread_id, user, token_id=token_id)
 
     async def chat(self, message):
         async for event in self.agent.astream_events(
@@ -126,10 +182,13 @@ class Agent:
             config=self.config,
             version="v2",
         ):
-            if event["event"] == "on_chat_model_stream":
-                token = event["data"]["chunk"].content
-                if token:
-                    yield token
+            if event.get("event") != "on_chat_model_stream":
+                continue
+            chunk = (event.get("data") or {}).get("chunk")
+            if chunk is None:
+                continue
+            payload = chunk.model_dump() if hasattr(chunk, "model_dump") else dict(chunk)
+            yield ("chunk", json.dumps(payload, default=str))
 
     async def generate_title(self, first_message):
         response = await self.llm.ainvoke(

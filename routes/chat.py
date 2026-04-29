@@ -7,12 +7,23 @@ from starlette.responses import JSONResponse
 from starlette.routing import Router, Route
 from sse_starlette.sse import EventSourceResponse
 
-from modules.agent import Agent
+from modules.agent import Agent, MCPConsentRequired
 from middleware.authenticated import User
+
+
+def _setup_required_response(redirect_url: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={
+            "setup_required": True,
+            "redirect_url": redirect_url,
+        }
+    )
 
 
 class ChatBody(BaseModel):
     message: str
+    token_id: int | None = None
 
 
 async def create_chat(request: Request):
@@ -20,22 +31,19 @@ async def create_chat(request: Request):
     user: User = request.user
 
     if not user.mcp_token:
-        return JSONResponse(
-            status_code=403,
-            content={
-                "setup_required": True,
-                "redirect_url": request.app.state.verys_client.mcp_auth_url
-            }
-        )
+        return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
 
     thread_id = str(uuid.uuid4())
 
     email_db = request.app.state.db.email
-    agent = await Agent.build(thread_id, email_db, user)
+    try:
+        agent = await Agent.build(thread_id, email_db, user, token_id=body.token_id)
+    except MCPConsentRequired as e:
+        return _setup_required_response(e.redirect_url)
 
     async def event_stream():
-        async for token in agent.chat(body.message):
-            yield {"event": "token", "data": token}
+        async for kind, text in agent.chat(body.message):
+            yield {"event": kind, "data": text}
 
         title = await agent.generate_title(body.message)
         yield {"event": "metadata", "data": json.dumps({"thread_id": thread_id, "title": title})}
@@ -49,30 +57,33 @@ async def send_message(request: Request):
     user: User = request.user
 
     if not user.mcp_token:
-        return JSONResponse(
-            status_code=403,
-            content={
-                "setup_required": True,
-                "redirect_url": request.app.state.verys_client.mcp_auth_url
-            }
-        )
+        return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
 
     email_db = request.app.state.db.email
-    agent = await Agent.build(thread_id, email_db, user)
+    try:
+        agent = await Agent.build(thread_id, email_db, user, token_id=body.token_id)
+    except MCPConsentRequired as e:
+        return _setup_required_response(e.redirect_url)
 
     async def event_stream():
-        async for token in agent.chat(body.message):
-            yield {"event": "token", "data": token}
+        async for kind, text in agent.chat(body.message):
+            yield {"event": kind, "data": text}
 
     return EventSourceResponse(event_stream())
 
 
 async def get_chat(request: Request):
     thread_id = request.path_params['thread_id']
-    user = request.user
+    user: User = request.user
+
+    if not user.mcp_token:
+        return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
 
     email_db = request.app.state.db.email
-    agent = await Agent.build(thread_id, email_db, user)
+    try:
+        agent = await Agent.build(thread_id, email_db, user)
+    except MCPConsentRequired as e:
+        return _setup_required_response(e.redirect_url)
     messages = agent.get_history()
 
     return JSONResponse({

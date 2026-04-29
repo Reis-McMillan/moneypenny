@@ -1,10 +1,18 @@
 import logging
+from datetime import datetime
 
 import httpx
 import jwt
 
 from config import config
 from db.auth_cache import AuthCache
+
+
+def _parse_expires_at(token: dict) -> dict:
+    raw = token.get('expires_at')
+    if isinstance(raw, str):
+        token['expires_at'] = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+    return token
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +150,10 @@ class VerysClient:
             raise RuntimeError(f"External token fetch failed: {response.status_code} {response.text}")
 
         data: list[dict] | dict = response.json()
+        if isinstance(data, list):
+            data = [_parse_expires_at(t) for t in data]
+        elif isinstance(data, dict):
+            data = _parse_expires_at(data)
         auth = self._insert_external_tokens(auth, data)
         await self.auth_cache.upsert(auth)
 
