@@ -1,0 +1,67 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: Reis-McMillan
+          repositories: deploy
+
+      - name: Clone deploy repo
+        run: |
+          git clone https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/Reis-McMillan/deploy.git deploy
+
+      - name: Update deployment timestamp
+        uses: mikefarah/yq@v4
+        with:
+          cmd: >
+            yq -i
+            '.spec.template.metadata.annotations."kubectl.kubernetes.io/restartedAt" = now'
+            deploy/base/moneypenny/moneypenny-backend-deployment.yaml
+
+      - name: Commit and push
+        run: |
+          cd deploy
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add base/moneypenny/moneypenny-backend-deployment.yaml
+          git commit -m "redeploy moneypenny backend (${{ github.sha }})"
+          git push
