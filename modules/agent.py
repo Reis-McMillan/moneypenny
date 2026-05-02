@@ -2,18 +2,18 @@ import json
 import logging
 
 import httpx
-import jwt
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent, AgentState
 from langchain.tools import tool
+from langchain_core.tools.structured import StructuredTool
 from langgraph.checkpoint.mongodb import MongoDBSaver
 from pymongo import MongoClient
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from openai import AsyncOpenAI
 from typing_extensions import NotRequired
+from pydantic import create_model
 
 from config import config
-from db.auth_cache import AuthCache
 from middleware.authenticated import User
 
 logging.basicConfig(level=logging.INFO)
@@ -49,6 +49,7 @@ class ChatState(AgentState):
 
 class Agent:
 
+    # to-do: evaluate this prompt... consider integrations with email-mcp prompt
     BASE_SYSTEM_PROMPT = """You are an email assistant. You help the user find, understand, and manage their emails.
 
     You have access to these tools:
@@ -158,7 +159,7 @@ class Agent:
         return search_emails
 
     @classmethod
-    async def build(cls, thread_id, email_db, user: User, token_id: int | None = None):
+    async def build(cls, thread_id, email_db, user: User, token_id: int):
         embed_client = AsyncOpenAI(base_url=config.VLLM_EMBED_URL, api_key="none")
         mcp_token = user.mcp_token
 
@@ -172,7 +173,28 @@ class Agent:
             }
         })
 
-        tools = await mcp_client.get_tools()
+        def _bind_token_id(tool: StructuredTool, token_id: int):
+            schema = getattr(tool, "args_schema", None)
+            if not schema or "token_id" not in schema.model_fields:
+                return tool
+            
+            fields = {
+                name: (f.annotation, f) for name, f in schema.model_fields.items() if name != "token_id"
+            }
+            NewSchema = create_model(f"{schema.__name__}WithoutTokenId", **fields)
+
+            async def call(**kwargs):
+                return await tool.ainvoke({**kwargs, "token_id": token_id})
+            
+            return StructuredTool.from_function(
+                coroutine=call,
+                name=tool.name,
+                description=tool.description,
+                args_schema=NewSchema
+            )
+
+        raw_tools = await mcp_client.get_tools()
+        tools = [_bind_token_id(t, token_id) for t in raw_tools]
 
         return cls(embed_client, email_db, tools, thread_id, user, token_id=token_id)
 

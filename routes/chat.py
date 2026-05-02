@@ -37,7 +37,7 @@ async def create_chat(request: Request):
 
     email_db = request.app.state.db.email
     try:
-        agent = await Agent.build(thread_id, email_db, user, token_id=body.token_id)
+        agent = await Agent.build(thread_id, email_db, user, body.token_id)
     except MCPConsentRequired as e:
         return _setup_required_response(e.redirect_url)
 
@@ -61,7 +61,7 @@ async def send_message(request: Request):
 
     email_db = request.app.state.db.email
     try:
-        agent = await Agent.build(thread_id, email_db, user, token_id=body.token_id)
+        agent = await Agent.build(thread_id, email_db, user, body.token_id)
     except MCPConsentRequired as e:
         return _setup_required_response(e.redirect_url)
 
