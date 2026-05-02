@@ -6,6 +6,7 @@ from starlette.datastructures import State
 from starlette.routing import Route
 from starlette.middleware import Middleware
 from starlette.middleware.authentication import AuthenticationMiddleware
+from starlette.middleware.cors import CORSMiddleware
 
 from config import config
 from db.base import Base
@@ -78,6 +79,13 @@ app = Starlette(
     lifespan=lifespan,
     routes=routes,
     middleware=[
+        Middleware(
+            CORSMiddleware,
+            allow_origins=config.ALLOWED_ORIGINS,
+            allow_credentials=True,
+            allow_methods=['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS'],
+            allow_headers=['Authorization', 'Content-Type']
+        ),
         Middleware(
             AuthenticationMiddleware,
             backend=BearerToken(),

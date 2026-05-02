@@ -19,3 +19,4 @@ EMBEDDING_MODEL = 'google/embeddinggemma-300m'
 FRONTEND_ORIGIN = 'http://localhost:5173'
 MCP_URL = 'http://localhost:8000'
 EMAIL_CHECK_INTERVAL = 30 * 60 # 30 minutes (in seconds)
+ALLOWED_ORIGINS = ['http://localhost:5173']
