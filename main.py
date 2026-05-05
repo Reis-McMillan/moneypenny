@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import asynccontextmanager
 import logging
 from starlette.applications import Starlette
@@ -13,14 +12,12 @@ from db.base import Base
 from db.email import Email
 from db.auth_cache import AuthCache
 from db.authorization import Authorization
+from db.action import Action
 from middleware.authenticated import BearerToken, on_authenticated_error
 from routes.auth import initialize, callback
 from routes.accounts import get_linked_accounts, refresh_linked_accounts, add_linked_account
-from routes.chat import create_chat, send_message, get_chat
+from routes.chat import create_chat, send_message, get_chat, draft_email, resume_chat
 from routes.ingest import get_counts, get_status
-from modules.ingest.embed import Embedder
-from modules.ingest.service import Service
-from modules.ingest.gmail_service import GmailService  # noqa: F401 — registers provider
 from modules.tokens import VerysClient
 
 logging.basicConfig(level=logging.INFO)
@@ -34,31 +31,23 @@ async def lifespan(app):
     app.state.db.email = Email()
     app.state.db.auth_cache = AuthCache()
     app.state.db.authorization = Authorization()
+    app.state.db.action = Action()
 
     await Base.ensure_collections([
         app.state.db.email,
         app.state.db.auth_cache,
-        app.state.db.authorization
+        app.state.db.authorization,
+        app.state.db.action,
     ])
 
     await app.state.db.authorization.ensure_indexes()
     await app.state.db.auth_cache.ensure_indexes()
+    await app.state.db.action.ensure_indexes()
     await app.state.db.email.ensure_search_index()
 
-    app.state.verys_client = VerysClient(app.state.db.auth_cache)
-    app.state.queue = asyncio.Queue()
-    app.state.embedder = Embedder(
-        app.state.queue,
-        app.state.db.email
+    app.state.verys_client = VerysClient(
+        app.state.db.auth_cache, app.state.db.action
     )
-    app.state.embedder.start()
-    app.state.services = {}
-
-    Service.set_auth_cache(app.state.db.auth_cache)
-    Service.set_email_db(app.state.db.email)
-    Service.set_queue(app.state.queue)
-    Service.set_services(app.state.services)
-    Service.set_verys_client(app.state.verys_client)
 
     yield
 
@@ -71,6 +60,9 @@ routes = [
     Route('/chat', create_chat, methods=['POST']),
     Route('/chat/{thread_id}', send_message, methods=['POST']),
     Route('/chat/{thread_id}', get_chat, methods=['GET']),
+    Route('/draft-email', draft_email, methods=['POST']),
+    Route('/chat/{thread_id}/draft-email', draft_email, methods=['POST']),
+    Route('/chat/{thread_id}/resume', resume_chat, methods=['POST']),
     Route('/ingest/counts', get_counts, methods=['GET']),
     Route('/ingest/status', get_status, methods=['GET']),
 ]

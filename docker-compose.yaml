@@ -6,6 +6,10 @@ services:
     environment:
       - MONGODB_INITDB_DATABASE=moneypenny
 
+  redis:
+    image: redis:7-alpine
+    network_mode: host
+
   mcp:
     image: email-mcp-server:latest
     network_mode: host
@@ -27,9 +31,64 @@ services:
     depends_on:
       - mongodb
       - mcp
+      - redis
     environment:
       - MONEYPENNY_CLIENT_ID=${MONEYPENNY_CLIENT_ID}
       - MONEYPENNY_CLIENT_SECRET=${MONEYPENNY_CLIENT_SECRET}
       - EMAIL_MCP_CLIENT_ID=${EMAIL_MCP_CLIENT_ID}
       - AUTH_URL=${AUTH_URL}
       - JWKS_URL=${JWKS_URL}
+
+  fetch-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ENV: dev
+    network_mode: host
+    depends_on:
+      - mongodb
+      - redis
+    environment:
+      - MONEYPENNY_CLIENT_ID=${MONEYPENNY_CLIENT_ID}
+      - MONEYPENNY_CLIENT_SECRET=${MONEYPENNY_CLIENT_SECRET}
+      - EMAIL_MCP_CLIENT_ID=${EMAIL_MCP_CLIENT_ID}
+      - AUTH_URL=${AUTH_URL}
+      - JWKS_URL=${JWKS_URL}
+    command: celery -A modules.ingest.celery_app:app worker -Q fetch -n fetch@%h --loglevel=info
+
+  embed-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ENV: dev
+    network_mode: host
+    depends_on:
+      - mongodb
+      - redis
+    environment:
+      - MONEYPENNY_CLIENT_ID=${MONEYPENNY_CLIENT_ID}
+      - MONEYPENNY_CLIENT_SECRET=${MONEYPENNY_CLIENT_SECRET}
+      - EMAIL_MCP_CLIENT_ID=${EMAIL_MCP_CLIENT_ID}
+      - AUTH_URL=${AUTH_URL}
+      - JWKS_URL=${JWKS_URL}
+    command: celery -A modules.ingest.celery_app:app worker -Q embed -n embed@%h --concurrency=2 --loglevel=info
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ENV: dev
+    network_mode: host
+    depends_on:
+      - mongodb
+      - redis
+    environment:
+      - MONEYPENNY_CLIENT_ID=${MONEYPENNY_CLIENT_ID}
+      - MONEYPENNY_CLIENT_SECRET=${MONEYPENNY_CLIENT_SECRET}
+      - EMAIL_MCP_CLIENT_ID=${EMAIL_MCP_CLIENT_ID}
+      - AUTH_URL=${AUTH_URL}
+      - JWKS_URL=${JWKS_URL}
+    command: celery -A modules.ingest.celery_app:app beat --scheduler redbeat.RedBeatScheduler --loglevel=info

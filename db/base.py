@@ -3,12 +3,14 @@ import logging
 
 from config import config
 
-logger = logging.getLogger('db.Base')
+
+logger = logging.getLogger(__name__)
+
 
 class Base:
     mongo_uri = config.MONGO_URI
     db_name = config.DB_NAME
-    client = AsyncMongoClient(mongo_uri)
+    client = AsyncMongoClient(mongo_uri, tz_aware=True)
 
     async def upsert(self, obj: dict):
         obj = self.schema(obj)
@@ -19,7 +21,6 @@ class Base:
             upsert=True
         )
 
-        
         return result.did_upsert
     
     @classmethod

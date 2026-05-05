@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from typing import Generator
 
 import httpx
 
@@ -13,16 +14,16 @@ GMAIL_API = 'https://gmail.googleapis.com/gmail/v1'
 class GmailService(Service):
     provider_id = 'google'
 
-    async def _list_messages(
-        self, client: httpx.AsyncClient, query: str, token: str
+    def _list_messages(
+        self, client: httpx.Client, query: str,
     ) -> list[dict]:
         messages = []
         params = {'q': query}
 
         while True:
-            response = await client.get(
+            response = client.get(
                 f'{GMAIL_API}/users/me/messages',
-                headers={'Authorization': f'Bearer {token}'},
+                headers={'Authorization': f'Bearer {self.external_token['access_token']}'},
                 params=params
             )
             if not response.is_success:
@@ -42,12 +43,12 @@ class GmailService(Service):
 
         return messages
 
-    async def _get_message(
-        self, client: httpx.AsyncClient, msg_id: str, token: str
+    def _get_message(
+        self, client: httpx.Client, msg_id: str
     ) -> dict | None:
-        response = await client.get(
+        response = client.get(
             f'{GMAIL_API}/users/me/messages/{msg_id}',
-            headers={'Authorization': f'Bearer {token}'}
+            headers={'Authorization': f'Bearer {self.external_token['access_token']}'}
         )
         if not response.is_success:
             logger.warning(
@@ -57,15 +58,15 @@ class GmailService(Service):
             return None
         return response.json()
 
-    async def queue_emails(self, last_dt: datetime, owner: str):
-        token = await self.get_token()
+    def _fetch(
+        self,
+        last_dt: datetime,
+    ) -> Generator[dict, None, None]:
         query = f"after:{int(last_dt.timestamp())}"
 
-        async with httpx.AsyncClient() as client:
-            messages = await self._list_messages(client, query, token)
+        with httpx.Client() as client:
+            messages = self._list_messages(client, query)
             for msg in messages:
-                if await self.email_db.exists(msg['id']):
-                    continue
-                full = await self._get_message(client, msg['id'], token)
+                full = self._get_message(client, msg['id'])
                 if full:
-                    await self.queue.put(self.normalize_email(full, owner))
+                    yield full

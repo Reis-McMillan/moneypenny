@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 logger = logging.getLogger(__name__)
 
 from config import config
-from modules.ingest.service import Service
+from modules.ingest import scheduler
 from modules.tokens import VerysClient
 from utils.jwks import get_public_key
 
@@ -114,15 +114,7 @@ async def callback(request: Request):
     }
     auth = await verys_client.mcp_token_exchange(auth)
     auth = await verys_client.get_external_tokens(auth)
-    if auth['external_tokens']:
-        services: dict = request.app.state.services
-        user_id = int(decoded['sub'])
-        for et in auth['external_tokens']:
-            key = (user_id, et['provider_id'])
-            if key not in services:
-                svc_cls = Service.for_provider(et['provider_id'])
-                if svc_cls:
-                    svc_cls(user_id, et['subject']).start()
+    scheduler.update_tasks(auth)
 
     if return_url:
         return RedirectResponse(

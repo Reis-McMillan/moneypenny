@@ -19,4 +19,5 @@ EMBEDDING_MODEL = 'google/embeddinggemma-300m'
 FRONTEND_ORIGIN = os.environ.get('FRONTEND_ORIGIN')
 MCP_URL = os.environ.get('MCP_URL')
 EMAIL_CHECK_INTERVAL = 30 * 60 # 30 minutes (in seconds)
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis.moneypenny.svc:6379/0')
 ALLOWED_ORIGINS = ['https://moneypenny.mcmlln.dev']

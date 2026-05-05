@@ -8,6 +8,7 @@ from starlette.responses import JSONResponse
 
 from config import config
 from middleware.authenticated import User
+from modules.ingest import scheduler
 from modules.tokens import VerysClient
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ async def refresh_linked_accounts(request: Request):
 
     verys_client: VerysClient = request.app.state.verys_client
     auth = await verys_client.get_external_tokens(user.auth)
+    scheduler.update_tasks(auth)
 
     return JSONResponse(
         content=[_serialize_token(t) for t in (auth['external_tokens'] or [])]

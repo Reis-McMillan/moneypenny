@@ -1,17 +1,17 @@
 import logging
 import re
-
-from datetime import datetime
-
+from datetime import datetime, timezone
+from pymongo import MongoClient
 from pymongo.operations import SearchIndexModel
 from voluptuous import Email as EmailValidator, Schema, Required, Optional, All, Coerce
 
 from db.base import Base
 
+
 logger = logging.getLogger(__name__)
 
-class Email(Base):
 
+class BaseEmail(Base):
     SEARCH_INDEX_NAME = "email_vector_index"
     METADATA_INDEX_NAME = "email_metadata_vector_index"
 
@@ -22,7 +22,7 @@ class Email(Base):
 
         self.schema = Schema({
             Required('id'): str,
-            Required('owner'): EmailValidator(),
+            Required('owner'): int,
             Required('provider_id'): str,
             Required('account_subject'): str,
             Required('from'): EmailValidator(),
@@ -44,6 +44,8 @@ class Email(Base):
         })
 
 
+class Email(BaseEmail):
+    
     async def ensure_search_index(self):
         index = SearchIndexModel(
             definition={
@@ -78,23 +80,39 @@ class Email(Base):
         await self.collection.create_search_index(metadata_index)
         logger.info(f"Created search index '{self.METADATA_INDEX_NAME}'")
 
-    async def get_last_dt(self, owner: str) -> datetime:
+    async def get_last_dt(self, owner: int, provider_id: str, account_subject: str) -> datetime:
         doc = await self.collection.find_one(
-            {'owner': owner},
+            {
+                'owner': owner,
+                'provider_id': provider_id,
+                'account_subject': account_subject
+            },
             {'ingested_at': 1},
-            sort=[('ingested_at', -1)]
+            sort=[('ingested_at', -1)],
         )
         if doc and doc.get('ingested_at'):
-            return doc['ingested_at']
-        return datetime(1970, 1, 1)
+            dt = doc['ingested_at']
+            if isinstance(dt, datetime) and dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        return datetime(1970, 1, 1, tzinfo=timezone.utc)
 
     async def exists(self, email_id: str) -> bool:
         return await self.collection.find_one({'id': email_id}, {'_id': 1}) is not None
 
-    async def count(self, owner: str, provider_id: str | None = None) -> int:
+    async def count(
+        self,
+        owner: int,
+        provider_id: str | None = None,
+        account_subject: str | None = None
+    ) -> int:
         query: dict = {'owner': owner}
-        if provider_id is not None:
+        assert (provider_id is None) == (account_subject is None), (
+            "provider_id and account_subject must both be specified or both None"
+        )
+        if provider_id is not None and account_subject is not None:
             query['provider_id'] = provider_id
+            query['account_subject'] = account_subject
         return await self.collection.count_documents(query)
 
     async def get_all(self) -> list[dict]:
@@ -189,4 +207,40 @@ class Email(Base):
         return [entry['doc'] for entry in ranked[:limit]]
 
 
-# add function to find last embedded email of a given user
+class SyncEmail(BaseEmail):
+    
+    def __init__(self):
+        # overwrite AsyncMongoClient in Base class
+        self.client = MongoClient(self.mongo_uri, tz_aware=True)
+        super().__init__()
+
+    def get_last_dt(self, owner: int, provider_id: str, account_subject: str) -> datetime:
+        doc = self.collection.find_one(
+            {
+                'owner': owner,
+                'provider_id': provider_id,
+                'account_subject': account_subject
+            },
+            {'ingested_at': 1},
+            sort=[('ingested_at', -1)],
+        )
+        if doc and doc.get('ingested_at'):
+            dt = doc['ingested_at']
+            if isinstance(dt, datetime) and dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        return datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+    def exists(self, email_id: str) -> bool:
+        return self.collection.find_one({'id': email_id}, {'_id': 1}) is not None
+
+    def upsert(self, obj: dict):
+        obj = self.schema(obj)
+        query = {f: obj[f] for f in self.identity_fields}
+        result = self.collection.update_one(
+            query,
+            {'$set': obj},
+            upsert=True
+        )
+
+        return result.did_upsert
