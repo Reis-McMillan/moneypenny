@@ -4,7 +4,7 @@ from celery.schedules import schedule
 from redbeat import RedBeatSchedulerEntry
 
 from config import config
-from modules.ingest.celery import app
+from modules.ingest.celery_app import app
 
 
 def _name(user_id: int, token_id: int) -> str:

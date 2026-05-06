@@ -3,7 +3,7 @@ import re
 from datetime import datetime, timezone
 from pymongo import MongoClient
 from pymongo.operations import SearchIndexModel
-from voluptuous import Email as EmailValidator, Schema, Required, Optional, All, Coerce
+from voluptuous import Schema, Required, Optional, All, Coerce
 
 from db.base import Base
 
@@ -25,7 +25,7 @@ class BaseEmail(Base):
             Required('owner'): int,
             Required('provider_id'): str,
             Required('account_subject'): str,
-            Required('from'): EmailValidator(),
+            Required('from'): str,
             Required('subject'): str,
             Required('body'): str,
             Required('embedding'): All(list, [Coerce(float)]),

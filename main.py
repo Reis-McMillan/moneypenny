@@ -17,7 +17,7 @@ from middleware.authenticated import BearerToken, on_authenticated_error
 from routes.auth import initialize, callback
 from routes.accounts import get_linked_accounts, refresh_linked_accounts, add_linked_account
 from routes.chat import create_chat, send_message, get_chat, draft_email, resume_chat
-from routes.ingest import get_counts, get_status
+from routes.ingest import get_counts, get_status, trigger_ingest
 from modules.tokens import VerysClient
 
 logging.basicConfig(level=logging.INFO)
@@ -65,6 +65,7 @@ routes = [
     Route('/chat/{thread_id}/resume', resume_chat, methods=['POST']),
     Route('/ingest/counts', get_counts, methods=['GET']),
     Route('/ingest/status', get_status, methods=['GET']),
+    Route('/ingest/trigger', trigger_ingest, methods=['POST']),
 ]
 
 app = Starlette(

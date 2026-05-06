@@ -7,7 +7,7 @@ from config import config
 from db.action import SyncAction
 from db.auth_cache import SyncAuthCache
 from db.email import SyncEmail
-from modules.ingest.celery import app
+from modules.ingest.celery_app import app
 from modules.ingest.embedding import (
     MAX_EMBED_CHARS,
     build_embed_text,

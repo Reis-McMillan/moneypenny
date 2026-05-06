@@ -29,8 +29,7 @@ async def get_counts(request: Request):
     if not auth:
         raise HTTPException(status_code=404, detail='User not found.')
 
-    owner = auth['email']
-    total = await email_db.count(owner)
+    total = await email_db.count(user_id)
     accounts = []
     for token in auth.get('external_tokens') or []:
         accounts.append({
@@ -38,7 +37,7 @@ async def get_counts(request: Request):
             'provider_id': token['provider_id'],
             'subject': token['subject'],
             'count': await email_db.count(
-                owner, provider_id=token['provider_id'], account_subject=token['subject']
+                user_id, provider_id=token['provider_id'], account_subject=token['subject']
             ),
         })
 
@@ -79,3 +78,36 @@ async def get_status(request: Request):
         })
 
     return JSONResponse({'services': out})
+
+
+async def trigger_ingest(request: Request):
+    user_id = _resolve_target_user_id(request)
+
+    raw = request.query_params.get('token_id')
+    if raw is None:
+        raise HTTPException(status_code=400, detail='token_id is required.')
+    try:
+        token_id = int(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail='token_id must be an integer.')
+
+    auth = await request.app.state.db.auth_cache.get(user_id)
+    if not auth:
+        raise HTTPException(status_code=404, detail='User not found.')
+    tokens = auth.get('external_tokens') or []
+    if not any(t['token_id'] == token_id for t in tokens):
+        raise HTTPException(status_code=404, detail='token_id not linked to this user.')
+
+    status = _read_status(user_id, token_id)
+    if status.get('currently_ingesting') == '1':
+        return JSONResponse({'already_running': True})
+
+    result = scheduler.app.send_task(
+        'fetch_emails',
+        args=[user_id, token_id],
+        queue='fetch',
+    )
+    return JSONResponse(
+        status_code=202,
+        content={'queued': True, 'task_id': result.id},
+    )

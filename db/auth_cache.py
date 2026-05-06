@@ -47,7 +47,7 @@ class AuthCache(BaseAuthCache):
 
 class SyncAuthCache(BaseAuthCache):
     def __init__(self):
-        self.client = MongoClient(self.mongo_uri)
+        self.client = MongoClient(self.mongo_uri, tz_aware=True)
         super().__init__()
 
     def get(self, user_id: int) -> dict | None:

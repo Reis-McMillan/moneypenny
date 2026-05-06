@@ -38,9 +38,9 @@ class Action(BaseAction):
 
 
 class SyncAction(BaseAction):
-    
+
     def __init__(self):
-        self.client = MongoClient(self.mongo_uri)
+        self.client = MongoClient(self.mongo_uri, tz_aware=True)
         super().__init__()
 
     def get(self, user_id: int, token_id: int):

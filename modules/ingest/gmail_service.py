@@ -18,7 +18,7 @@ class GmailService(Service):
         self, client: httpx.Client, query: str,
     ) -> list[dict]:
         messages = []
-        params = {'q': query}
+        params: dict = {'q': query} if query else {}
 
         while True:
             response = client.get(
@@ -62,7 +62,7 @@ class GmailService(Service):
         self,
         last_dt: datetime,
     ) -> Generator[dict, None, None]:
-        query = f"after:{int(last_dt.timestamp())}"
+        query = f"after:{int(last_dt.timestamp())}" if last_dt.year > 1970 else ""
 
         with httpx.Client() as client:
             messages = self._list_messages(client, query)
