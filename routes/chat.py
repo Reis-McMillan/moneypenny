@@ -1,9 +1,11 @@
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 
 import openai
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Router, Route
@@ -27,6 +29,13 @@ def _setup_required_response(redirect_url: str) -> JSONResponse:
 
 def _error_event(code: str, message: str) -> dict:
     return {"event": "error", "data": json.dumps({"code": code, "message": message})}
+
+
+async def _require_owned_chat(request: Request, thread_id: str) -> dict:
+    chat = await request.app.state.db.chat.get(thread_id)
+    if not chat or chat['owner'] != request.user.user_id:
+        raise HTTPException(status_code=404, detail='Chat not found.')
+    return chat
 
 
 async def _safe_stream(gen):
@@ -71,6 +80,7 @@ async def create_chat(request: Request):
     thread_id = str(uuid.uuid4())
 
     email_db = request.app.state.db.email
+    chat_db = request.app.state.db.chat
     try:
         agent = await Agent.build(thread_id, email_db, user, body.token_id)
     except MCPConsentRequired as e:
@@ -82,6 +92,14 @@ async def create_chat(request: Request):
 
         try:
             title = await agent.generate_title(body.message)
+            now = datetime.now(timezone.utc)
+            await chat_db.upsert({
+                'thread_id': thread_id,
+                'owner': user.user_id,
+                'title': title,
+                'created_at': now,
+                'updated_at': now,
+            })
             yield {"event": "metadata", "data": json.dumps({"thread_id": thread_id, "title": title})}
         except Exception:
             logger.exception("Title generation failed")
@@ -97,15 +115,21 @@ async def send_message(request: Request):
     if not user.mcp_token:
         return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
 
+    await _require_owned_chat(request, thread_id)
+
     email_db = request.app.state.db.email
+    chat_db = request.app.state.db.chat
     try:
         agent = await Agent.build(thread_id, email_db, user, body.token_id)
     except MCPConsentRequired as e:
         return _setup_required_response(e.redirect_url)
 
     async def event_stream():
-        async for evt in _safe_stream(agent.chat(body.message)):
-            yield evt
+        try:
+            async for evt in _safe_stream(agent.chat(body.message)):
+                yield evt
+        finally:
+            await chat_db.touch(thread_id)
 
     return EventSourceResponse(event_stream())
 
@@ -117,6 +141,8 @@ async def get_chat(request: Request):
     if not user.mcp_token:
         return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
 
+    chat = await _require_owned_chat(request, thread_id)
+
     email_db = request.app.state.db.email
     try:
         # -1 provided as token_id as place holder... not used in route
@@ -127,7 +153,7 @@ async def get_chat(request: Request):
 
     return JSONResponse({
         "thread_id": thread_id,
-        "title": agent.get_title(),
+        "title": chat['title'],
         "messages": [
             {"role": msg.type, "content": msg.content}
             for msg in messages
@@ -137,7 +163,13 @@ async def get_chat(request: Request):
 
 
 async def list_chats(request: Request):
-    pass
+    user: User = request.user
+
+    chats = await request.app.state.db.chat.list_for_owner(user.user_id)
+    for c in chats:
+        c['created_at'] = c['created_at'].isoformat()
+        c['updated_at'] = c['updated_at'].isoformat()
+    return JSONResponse({'chats': chats})
 
 
 async def resume_chat(request: Request):
@@ -148,15 +180,21 @@ async def resume_chat(request: Request):
     if not user.mcp_token:
         return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
 
+    await _require_owned_chat(request, thread_id)
+
     email_db = request.app.state.db.email
+    chat_db = request.app.state.db.chat
     try:
         agent = await Agent.build(thread_id, email_db, user, body.token_id)
     except MCPConsentRequired as e:
         return _setup_required_response(e.redirect_url)
 
     async def event_stream():
-        async for evt in _safe_stream(agent.resume(body.decisions)):
-            yield evt
+        try:
+            async for evt in _safe_stream(agent.resume(body.decisions)):
+                yield evt
+        finally:
+            await chat_db.touch(thread_id)
 
     return EventSourceResponse(event_stream())
 
@@ -168,28 +206,51 @@ async def draft_email(request: Request):
     if not user.mcp_token:
         return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
 
-    thread_id = request.path_params.get('thread_id') or str(uuid.uuid4())
+    incoming_thread_id = request.path_params.get('thread_id')
+    is_new_chat = incoming_thread_id is None
+    thread_id = incoming_thread_id or str(uuid.uuid4())
+
+    existing_chat = None
+    if not is_new_chat:
+        existing_chat = await _require_owned_chat(request, thread_id)
 
     email_db = request.app.state.db.email
+    chat_db = request.app.state.db.chat
     try:
         agent = await Agent.build(thread_id, email_db, user, body.token_id)
     except MCPConsentRequired as e:
         return _setup_required_response(e.redirect_url)
-    
-    title = agent.get_title()
-    if not title:
+
+    if existing_chat:
+        title = existing_chat['title']
+    else:
         title = await agent.generate_title(
             f"Draft email to {body.recipient} about {body.content}"
         )
 
     async def event_stream():
-        async for evt in _safe_stream(agent.draft_email(
-            content=body.content,
-            recipient=body.recipient,
-            recipient_email=body.recipient_email,
-        )):
-            yield evt
+        try:
+            async for evt in _safe_stream(agent.draft_email(
+                content=body.content,
+                recipient=body.recipient,
+                recipient_email=body.recipient_email,
+            )):
+                yield evt
 
-        yield {"event": "metadata", "data": json.dumps({"thread_id": thread_id, "title": title})}
+            now = datetime.now(timezone.utc)
+            if is_new_chat:
+                await chat_db.upsert({
+                    'thread_id': thread_id,
+                    'owner': user.user_id,
+                    'title': title,
+                    'created_at': now,
+                    'updated_at': now,
+                })
+            else:
+                await chat_db.touch(thread_id)
+
+            yield {"event": "metadata", "data": json.dumps({"thread_id": thread_id, "title": title})}
+        except Exception:
+            logger.exception("draft_email stream failed")
 
     return EventSourceResponse(event_stream())

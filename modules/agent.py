@@ -3,7 +3,7 @@ import logging
 
 import httpx
 from langchain_openai import ChatOpenAI
-from langchain.agents import create_agent, AgentState
+from langchain.agents import create_agent
 from langchain.agents.middleware.human_in_the_loop import HumanInTheLoopMiddleware
 from langchain.tools import tool, BaseTool
 from langchain_core.tools.structured import StructuredTool
@@ -12,7 +12,6 @@ from langgraph.types import Command
 from pymongo import MongoClient
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from openai import AsyncOpenAI
-from typing_extensions import NotRequired
 from config import config
 from middleware.authenticated import User
 from db.email import Email
@@ -25,10 +24,6 @@ class MCPConsentRequired(Exception):
     def __init__(self, redirect_url):
         self.redirect_url = redirect_url
         super().__init__(f"MCP consent required: {redirect_url}")
-
-
-class ChatState(AgentState):
-    title: NotRequired[str]
 
 
 class Agent:
@@ -143,7 +138,6 @@ class Agent:
             system_prompt=self._build_system_prompt(user, token_id),
             tools=tools,
             checkpointer=checkpointer,
-            state_schema=ChatState,
             middleware=middleware,
         )
 
@@ -267,13 +261,7 @@ class Agent:
             f"Generate a short 3-5 word title for a conversation that starts with this message. "
             f"Reply with ONLY the title, nothing else.\n\nMessage: {first_message}"
         )
-        title = response.content.strip().strip('"')
-        self.agent.update_state(self.config, {"title": title})
-        return title
-
-    def get_title(self):
-        state = self.agent.get_state(self.config)
-        return state.values.get("title", "")
+        return response.content.strip().strip('"')
 
     def get_history(self):
         state = self.agent.get_state(self.config)
