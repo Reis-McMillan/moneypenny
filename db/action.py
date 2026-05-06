@@ -30,11 +30,10 @@ class Action(BaseAction):
             unique=True,
         )
 
-    async def get(self, user_id: int, token_id: int):
-        return await self.collection.find_one({
+    async def get(self, user_id: int):
+        return await self.collection.find({
             'user_id': user_id,
-            'token_id': token_id
-        }, {'_id': 0})
+        }, {'_id': 0}).to_list()
 
 
 class SyncAction(BaseAction):
@@ -43,11 +42,10 @@ class SyncAction(BaseAction):
         self.client = MongoClient(self.mongo_uri, tz_aware=True)
         super().__init__()
 
-    def get(self, user_id: int, token_id: int):
-        return self.collection.find_one({
+    def get(self, user_id: int):
+        return self.collection.find({
             'user_id': user_id,
-            'token_id': token_id
-        }, {'_id': 0})
+        }, {'_id': 0}).to_list()
     
     def upsert(self, obj: dict):
         obj = self.schema(obj)

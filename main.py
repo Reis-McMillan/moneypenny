@@ -17,6 +17,7 @@ from db.chat import Chat
 from middleware.authenticated import BearerToken, on_authenticated_error
 from routes.auth import initialize, callback
 from routes.accounts import get_linked_accounts, refresh_linked_accounts, add_linked_account
+from routes.actions import get_actions, create_action
 from routes.chat import create_chat, send_message, get_chat, list_chats, draft_email, resume_chat
 from routes.ingest import get_counts, get_status, trigger_ingest
 from modules.tokens import VerysClient
@@ -61,6 +62,8 @@ routes = [
     Route('/accounts', get_linked_accounts, methods=['GET']),
     Route('/accounts/refresh', refresh_linked_accounts, methods=['POST']),
     Route('/accounts/link', add_linked_account, methods=['GET']),
+    Route('/actions', get_actions, methods=['GET']),
+    Route('/actions', create_action, methods=['POST']),
     Route('/chat', create_chat, methods=['POST']),
     Route('/chat', list_chats, methods=['GET']),
     Route('/chat/{thread_id}', send_message, methods=['POST']),

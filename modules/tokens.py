@@ -19,6 +19,13 @@ def _parse_expires_at(token: dict) -> dict:
     return token
 
 
+def build_reauth_url(provider_id: str) -> str:
+    return (
+        f"{config.AUTH_URL}/federation/initiate?"
+        f"{urlencode({'provider_id': provider_id})}"
+    )
+
+
 class BaseVerysClient:
     def __init__(self):
         self.token_url = f"{config.AUTH_URL}/token"
@@ -160,16 +167,14 @@ class VerysClient(BaseVerysClient):
             )
 
         if not response.is_success:
-            if (token_id and response.status_code == 401 and 
+            if (token_id and response.status_code == 401 and
                 response.json().get('error') == 'reauthorization_required'):
                 token = self.find_token(auth['external_tokens'], token_id)
-                reauth_url = (self.federation_url 
-                              + f'initiate?{urlencode({'provider_id': token['provider_id']})}')
                 await self.action.upsert({
                     'user_id': auth['user_id'],
                     'token_id': token_id,
                     'token_email': token['email'],
-                    'reauth_url': reauth_url
+                    'reauth_url': build_reauth_url(token['provider_id'])
                 })
             raise RuntimeError(f"External token fetch failed: {response.status_code} {response.text}")
 
@@ -278,16 +283,14 @@ class SyncVerysClient(BaseVerysClient):
             )
 
         if not response.is_success:
-            if (token_id and response.status_code == 401 and 
+            if (token_id and response.status_code == 401 and
                 response.json().get('error') == 'reauthorization_required'):
                 token = self.find_token(auth['external_tokens'], token_id)
-                reauth_url = (self.federation_url 
-                              + f'initiate?{urlencode({'provider_id': token['provider_id']})}')
                 self.action.upsert({
                     'user_id': auth['user_id'],
                     'token_id': token_id,
                     'token_email': token['email'],
-                    'reauth_url': reauth_url
+                    'reauth_url': build_reauth_url(token['provider_id'])
                 })
             raise RuntimeError(f"External token fetch failed: {response.status_code} {response.text}")
 
