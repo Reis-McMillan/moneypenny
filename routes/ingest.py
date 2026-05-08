@@ -35,7 +35,7 @@ async def get_counts(request: Request):
         accounts.append({
             'token_id': token['token_id'],
             'provider_id': token['provider_id'],
-            'subject': token['subject'],
+            'email': token['email'],
             'count': await email_db.count(
                 user_id, provider_id=token['provider_id'], account_subject=token['subject']
             ),
@@ -70,7 +70,7 @@ async def get_status(request: Request):
         out.append({
             'token_id': token_id,
             'provider_id': token['provider_id'],
-            'subject': token['subject'],
+            'email': token['email'],
             'currently_ingesting': status.get('currently_ingesting') == '1',
             'last_run_at': status.get('last_run_at') or None,
             'last_error': status.get('last_error') or None,

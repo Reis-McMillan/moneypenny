@@ -2,6 +2,8 @@ import logging
 from datetime import datetime
 import httpx
 import jwt
+import redis
+import redis.asyncio as redis_async
 from urllib.parse import urlencode
 
 from config import config
@@ -10,6 +12,9 @@ from db.action import Action, SyncAction
 
 
 logger = logging.getLogger(__name__)
+
+LOCK_TIMEOUT = 30
+LOCK_BLOCKING_TIMEOUT = 15
 
 
 def _parse_expires_at(token: dict) -> dict:
@@ -73,38 +78,55 @@ class BaseVerysClient:
         return None
 
 class VerysClient(BaseVerysClient):
-    
-    def __init__(self, auth_cache: AuthCache, action: Action):
+
+    def __init__(
+        self,
+        auth_cache: AuthCache,
+        action: Action,
+        redis_client: redis_async.Redis,
+    ):
         super().__init__()
         self.auth_cache: AuthCache = auth_cache
         self.action: Action = action
-    
+        self.redis: redis_async.Redis = redis_client
+
+    def _lock(self, key: str):
+        return self.redis.lock(
+            key, timeout=LOCK_TIMEOUT, blocking_timeout=LOCK_BLOCKING_TIMEOUT
+        )
+
     async def refresh_access_token(
         self,
         auth: dict
     ) -> dict:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.token_url,
-                data={
-                    "grant_type": "refresh_token",
-                    "client_id": config.CLIENT_ID,
-                    "client_secret": config.CLIENT_SECRET,
-                    "refresh_token": auth['refresh_token']
-                }
-            )
+        user_id = auth['user_id']
+        async with self._lock(f"verys:refresh:{user_id}"):
+            fresh = await self.auth_cache.get(user_id) or auth
+            if not self.token_expired(fresh['access_token']):
+                return fresh
 
-        if not response.is_success:
-            raise RuntimeError(f"Token refresh failed: {response.status_code} {response.text}")
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self.token_url,
+                    data={
+                        "grant_type": "refresh_token",
+                        "client_id": config.CLIENT_ID,
+                        "client_secret": config.CLIENT_SECRET,
+                        "refresh_token": fresh['refresh_token']
+                    }
+                )
 
-        data = response.json()
-        auth['access_token'] = data['access_token']
-        auth['refresh_token'] = data['refresh_token']
+            if not response.is_success:
+                raise RuntimeError(f"Token refresh failed: {response.status_code} {response.text}")
 
-        await self.auth_cache.upsert(auth)
+            data = response.json()
+            fresh['access_token'] = data['access_token']
+            fresh['refresh_token'] = data['refresh_token']
 
-        return auth
-    
+            await self.auth_cache.upsert(fresh)
+
+            return fresh
+
     async def check_token(
         self,
         auth: dict,
@@ -115,37 +137,50 @@ class VerysClient(BaseVerysClient):
 
         return auth
 
+    async def check_mcp_token(self, auth: dict) -> dict:
+        mcp_token = auth.get('mcp_token')
+        if not mcp_token or self.token_expired(mcp_token):
+            logger.info("MCP token expired or missing for %s, exchanging", auth['email'])
+            auth = await self.mcp_token_exchange(auth)
+        return auth
+
     async def mcp_token_exchange(
         self,
         auth: dict
     ) -> dict:
         auth = await self.check_token(auth)
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.token_url,
-                data={
-                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "client_id": config.CLIENT_ID,
-                    "client_secret": config.CLIENT_SECRET,
-                    "subject_token": auth['access_token'],
-                    "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
-                    "audience": config.MCP_CLIENT_ID,
-                    "scope": "mcp"
-                }
-            )
+        user_id = auth['user_id']
+        async with self._lock(f"verys:mcp_exchange:{user_id}"):
+            fresh = await self.auth_cache.get(user_id) or auth
+            mcp_token = fresh.get('mcp_token')
+            if mcp_token and not self.token_expired(mcp_token):
+                return fresh
 
-        if not response.is_success:
-            logger.warning(
-                f"MCP token exchange failed: {response.status_code} {response.text}"
-            )
-            return auth
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self.token_url,
+                    data={
+                        "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                        "client_id": config.CLIENT_ID,
+                        "client_secret": config.CLIENT_SECRET,
+                        "subject_token": fresh['access_token'],
+                        "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                        "audience": config.MCP_CLIENT_ID,
+                    }
+                )
 
-        data = response.json()
-        auth['mcp_token'] = data['access_token']
-        
-        await self.auth_cache.upsert(auth)
+            if not response.is_success:
+                logger.warning(
+                    f"MCP token exchange failed: {response.status_code} {response.text}"
+                )
+                return fresh
 
-        return auth
+            data = response.json()
+            fresh['mcp_token'] = data['access_token']
+
+            await self.auth_cache.upsert(fresh)
+
+            return fresh
 
     async def get_external_tokens(
         self,
@@ -167,8 +202,18 @@ class VerysClient(BaseVerysClient):
             )
 
         if not response.is_success:
-            if (token_id and response.status_code == 401 and
-                response.json().get('error') == 'reauthorization_required'):
+            error_payload = {}
+            try:
+                error_payload = response.json()
+            except Exception:
+                pass
+
+            needs_reauth = (
+                token_id is not None
+                and response.status_code == 401
+                and error_payload.get('error') == 'reauthorization_required'
+            )
+            if needs_reauth:
                 token = self.find_token(auth['external_tokens'], token_id)
                 await self.action.upsert({
                     'user_id': auth['user_id'],
@@ -190,37 +235,54 @@ class VerysClient(BaseVerysClient):
 
 
 class SyncVerysClient(BaseVerysClient):
-    def __init__(self, auth_cache: SyncAuthCache, action: SyncAction):
+    def __init__(
+        self,
+        auth_cache: SyncAuthCache,
+        action: SyncAction,
+        redis_client: redis.Redis,
+    ):
         super().__init__()
         self.auth_cache = auth_cache
         self.action = action
+        self.redis: redis.Redis = redis_client
+
+    def _lock(self, key: str):
+        return self.redis.lock(
+            key, timeout=LOCK_TIMEOUT, blocking_timeout=LOCK_BLOCKING_TIMEOUT
+        )
 
     def refresh_access_token(
         self,
         auth: dict
     ) -> dict:
-        with httpx.Client() as client:
-            response = client.post(
-                self.token_url,
-                data={
-                    "grant_type": "refresh_token",
-                    "client_id": config.CLIENT_ID,
-                    "client_secret": config.CLIENT_SECRET,
-                    "refresh_token": auth['refresh_token']
-                }
-            )
+        user_id = auth['user_id']
+        with self._lock(f"verys:refresh:{user_id}"):
+            fresh = self.auth_cache.get(user_id) or auth
+            if not self.token_expired(fresh['access_token']):
+                return fresh
 
-        if not response.is_success:
-            raise RuntimeError(f"Token refresh failed: {response.status_code} {response.text}")
+            with httpx.Client() as client:
+                response = client.post(
+                    self.token_url,
+                    data={
+                        "grant_type": "refresh_token",
+                        "client_id": config.CLIENT_ID,
+                        "client_secret": config.CLIENT_SECRET,
+                        "refresh_token": fresh['refresh_token']
+                    }
+                )
 
-        data = response.json()
-        auth['access_token'] = data['access_token']
-        auth['refresh_token'] = data['refresh_token']
+            if not response.is_success:
+                raise RuntimeError(f"Token refresh failed: {response.status_code} {response.text}")
 
-        self.auth_cache.upsert(auth)
+            data = response.json()
+            fresh['access_token'] = data['access_token']
+            fresh['refresh_token'] = data['refresh_token']
 
-        return auth
-    
+            self.auth_cache.upsert(fresh)
+
+            return fresh
+
     def check_token(
         self,
         auth: dict,
@@ -230,38 +292,45 @@ class SyncVerysClient(BaseVerysClient):
             auth = self.refresh_access_token(auth)
 
         return auth
-    
+
     def mcp_token_exchange(
         self,
         auth: dict
     ) -> dict:
         auth = self.check_token(auth)
-        with httpx.Client() as client:
-            response = client.post(
-                self.token_url,
-                data={
-                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "client_id": config.CLIENT_ID,
-                    "client_secret": config.CLIENT_SECRET,
-                    "subject_token": auth['access_token'],
-                    "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
-                    "audience": config.MCP_CLIENT_ID,
-                    "scope": "mcp"
-                }
-            )
+        user_id = auth['user_id']
+        with self._lock(f"verys:mcp_exchange:{user_id}"):
+            fresh = self.auth_cache.get(user_id) or auth
+            mcp_token = fresh.get('mcp_token')
+            if mcp_token and not self.token_expired(mcp_token):
+                return fresh
 
-        if not response.is_success:
-            logger.warning(
-                f"MCP token exchange failed: {response.status_code} {response.text}"
-            )
-            return auth
+            with httpx.Client() as client:
+                response = client.post(
+                    self.token_url,
+                    data={
+                        "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                        "client_id": config.CLIENT_ID,
+                        "client_secret": config.CLIENT_SECRET,
+                        "subject_token": fresh['access_token'],
+                        "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                        "audience": config.MCP_CLIENT_ID,
+                        "scope": "mcp"
+                    }
+                )
 
-        data = response.json()
-        auth['mcp_token'] = data['access_token']
-        
-        self.auth_cache.upsert(auth)
+            if not response.is_success:
+                logger.warning(
+                    f"MCP token exchange failed: {response.status_code} {response.text}"
+                )
+                return fresh
 
-        return auth
+            data = response.json()
+            fresh['mcp_token'] = data['access_token']
+
+            self.auth_cache.upsert(fresh)
+
+            return fresh
 
     def get_external_tokens(
         self,

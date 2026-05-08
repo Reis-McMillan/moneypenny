@@ -31,6 +31,16 @@ def _error_event(code: str, message: str) -> dict:
     return {"event": "error", "data": json.dumps({"code": code, "message": message})}
 
 
+async def _ensure_mcp_token(request: Request) -> JSONResponse | None:
+    user: User = request.user
+    verys_client = request.app.state.verys_client
+    user.auth = await verys_client.check_mcp_token(user.auth)
+    user.mcp_token = user.auth.get('mcp_token')
+    if not user.mcp_token:
+        return _setup_required_response(verys_client.mcp_auth_url)
+    return None
+
+
 async def _require_owned_chat(request: Request, thread_id: str) -> dict:
     chat = await request.app.state.db.chat.get(thread_id)
     if not chat or chat['owner'] != request.user.user_id:
@@ -74,8 +84,8 @@ async def create_chat(request: Request):
     body = ChatBody(**await request.json())
     user: User = request.user
 
-    if not user.mcp_token:
-        return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
+    if (resp := await _ensure_mcp_token(request)) is not None:
+        return resp
 
     thread_id = str(uuid.uuid4())
 
@@ -112,8 +122,8 @@ async def send_message(request: Request):
     thread_id = request.path_params['thread_id']
     user: User = request.user
 
-    if not user.mcp_token:
-        return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
+    if (resp := await _ensure_mcp_token(request)) is not None:
+        return resp
 
     await _require_owned_chat(request, thread_id)
 
@@ -138,8 +148,8 @@ async def get_chat(request: Request):
     thread_id = request.path_params['thread_id']
     user: User = request.user
 
-    if not user.mcp_token:
-        return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
+    if (resp := await _ensure_mcp_token(request)) is not None:
+        return resp
 
     chat = await _require_owned_chat(request, thread_id)
 
@@ -177,8 +187,8 @@ async def resume_chat(request: Request):
     thread_id = request.path_params['thread_id']
     user: User = request.user
 
-    if not user.mcp_token:
-        return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
+    if (resp := await _ensure_mcp_token(request)) is not None:
+        return resp
 
     await _require_owned_chat(request, thread_id)
 
@@ -203,8 +213,8 @@ async def draft_email(request: Request):
     body = DraftBody(**await request.json())
     user: User = request.user
 
-    if not user.mcp_token:
-        return _setup_required_response(request.app.state.verys_client.mcp_auth_url)
+    if (resp := await _ensure_mcp_token(request)) is not None:
+        return resp
 
     incoming_thread_id = request.path_params.get('thread_id')
     is_new_chat = incoming_thread_id is None

@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
+import redis
 from openai import OpenAI
 
 from config import config
@@ -16,6 +17,7 @@ from modules.ingest.embedding import (
 from modules.ingest.service import Service
 from modules.tokens import SyncVerysClient
 import modules.ingest.gmail_service  # noqa: F401 — registers provider
+import modules.ingest.microsoft_service  # noqa: F401 — registers provider
 
 
 logger = logging.getLogger(__name__)
@@ -24,7 +26,8 @@ logger = logging.getLogger(__name__)
 _email = SyncEmail()
 _auth_cache = SyncAuthCache()
 _action = SyncAction()
-_verys = SyncVerysClient(_auth_cache, _action)
+_redis = redis.Redis.from_url(config.REDIS_URL)
+_verys = SyncVerysClient(_auth_cache, _action, _redis)
 _embed_client = OpenAI(base_url=config.VLLM_EMBED_URL, api_key="none")
 
 def _status_key(user_id: int, token_id: int) -> str:

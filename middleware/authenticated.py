@@ -62,10 +62,7 @@ class BearerToken(AuthenticationBackend):
             raise AuthCacheMissing('User session not found.')
         
         verys_client: VerysClient = conn.app.state.verys_client
-       
-        mcp_token = auth.get('mcp_token')
-        if (not mcp_token or verys_client.token_expired(mcp_token)):
-            auth = await verys_client.mcp_token_exchange(auth)
+        auth = await verys_client.check_mcp_token(auth)
 
         return AuthCredentials(["authenticated"]), User(auth)
     

@@ -20,6 +20,7 @@ services:
       - EMAIL_MCP_CLIENT_SECRET=${EMAIL_MCP_CLIENT_SECRET}
       - AUTH_URL=${AUTH_URL}
       - JWKS_URL=${JWKS_URL}
+      - MONEYPENNY_CLIENT_ID=${MONEYPENNY_CLIENT_ID}
 
   moneypenny:
     build:

@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import logging
+import redis.asyncio as redis_async
 from starlette.applications import Starlette
 from starlette.datastructures import State
 from starlette.routing import Route
@@ -50,18 +51,23 @@ async def lifespan(app):
     await app.state.db.chat.ensure_indexes()
     await app.state.db.email.ensure_search_index()
 
+    app.state.redis = redis_async.Redis.from_url(config.REDIS_URL)
+
     app.state.verys_client = VerysClient(
-        app.state.db.auth_cache, app.state.db.action
+        app.state.db.auth_cache, app.state.db.action, app.state.redis
     )
 
-    yield
+    try:
+        yield
+    finally:
+        await app.state.redis.aclose()
 
 routes = [
     Route('/auth/initialize', initialize),
     Route('/auth/callback', callback),
     Route('/accounts', get_linked_accounts, methods=['GET']),
     Route('/accounts/refresh', refresh_linked_accounts, methods=['POST']),
-    Route('/accounts/link', add_linked_account, methods=['GET']),
+    Route('/accounts/link', add_linked_account, methods=['POST']),
     Route('/actions', get_actions, methods=['GET']),
     Route('/actions', create_action, methods=['POST']),
     Route('/chat', create_chat, methods=['POST']),
