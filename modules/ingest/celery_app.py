@@ -17,4 +17,4 @@ app.conf.task_acks_late = True
 app.conf.worker_prefetch_multiplier = 1
 app.conf.beat_scheduler = "redbeat.RedBeatScheduler"
 app.conf.redbeat_redis_url = config.REDIS_URL
-app.conf.redbeat_lock_timeout = 60
+app.conf.redbeat_lock_timeout = 3600
