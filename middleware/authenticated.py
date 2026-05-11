@@ -42,7 +42,7 @@ class BearerToken(AuthenticationBackend):
     async def authenticate(self, conn):
         auth = conn.headers.get("Authorization")
         if not auth:
-            if (conn.method, conn.url.path) in PUBLIC_PATHS:
+            if (conn.scope['method'], conn.url.path) in PUBLIC_PATHS:
                 return
             raise AuthenticationError('Missing auth token.')
 
