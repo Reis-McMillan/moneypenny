@@ -31,14 +31,18 @@ class AuthCacheMissing(AuthenticationError):
         super().__init__(*args, **kwargs)
 
 
-PUBLIC_PATHS = {'/auth/initialize', '/auth/callback'}
+PUBLIC_PATHS = {
+    ('GET', '/auth/initialize'),
+    ('GET', '/auth/callback'),
+    ('POST', '/test-users'),
+}
 
 
 class BearerToken(AuthenticationBackend):
     async def authenticate(self, conn):
         auth = conn.headers.get("Authorization")
         if not auth:
-            if conn.url.path in PUBLIC_PATHS:
+            if (conn.method, conn.url.path) in PUBLIC_PATHS:
                 return
             raise AuthenticationError('Missing auth token.')
 

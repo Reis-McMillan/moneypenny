@@ -15,12 +15,14 @@ from db.auth_cache import AuthCache
 from db.authorization import Authorization
 from db.action import Action
 from db.chat import Chat
+from db.test_user import TestUser
 from middleware.authenticated import BearerToken, on_authenticated_error
 from routes.auth import initialize, callback
 from routes.accounts import get_linked_accounts, refresh_linked_accounts, add_linked_account
 from routes.actions import get_actions, create_action
 from routes.chat import create_chat, send_message, get_chat, list_chats, draft_email, resume_chat
 from routes.ingest import get_counts, get_status, trigger_ingest
+from routes.test_user import create_test_user, get_test_users, delete_test_user
 from modules.tokens import VerysClient
 
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +38,7 @@ async def lifespan(app):
     app.state.db.authorization = Authorization()
     app.state.db.action = Action()
     app.state.db.chat = Chat()
+    app.state.db.test_user = TestUser()
 
     await Base.ensure_collections([
         app.state.db.email,
@@ -43,12 +46,14 @@ async def lifespan(app):
         app.state.db.authorization,
         app.state.db.action,
         app.state.db.chat,
+        app.state.db.test_user,
     ])
 
     await app.state.db.authorization.ensure_indexes()
     await app.state.db.auth_cache.ensure_indexes()
     await app.state.db.action.ensure_indexes()
     await app.state.db.chat.ensure_indexes()
+    await app.state.db.test_user.ensure_indexes()
     await app.state.db.email.ensure_search_index()
 
     app.state.redis = redis_async.Redis.from_url(config.REDIS_URL)
@@ -80,6 +85,9 @@ routes = [
     Route('/ingest/counts', get_counts, methods=['GET']),
     Route('/ingest/status', get_status, methods=['GET']),
     Route('/ingest/trigger', trigger_ingest, methods=['POST']),
+    Route('/test-users', create_test_user, methods=['POST']),
+    Route('/test-users', get_test_users, methods=['GET']),
+    Route('/test-users', delete_test_user, methods=['DELETE']),
 ]
 
 app = Starlette(
